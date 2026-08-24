@@ -1,0 +1,89 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "io.github.erudys27",
+    "module": "oepm",
+    "version": "0.1.0-SNAPSHOT",
+    "attributes": {
+      "org.gradle.status": "integration"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "8.10.2"
+    }
+  },
+  "variants": [
+    {
+      "name": "apiElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 17,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-api",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "1.9.24"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "oepm-0.1.0-SNAPSHOT.jar",
+          "url": "oepm-0.1.0-SNAPSHOT.jar",
+          "size": 52615,
+          "sha512": "9ec38c187658d531f05e787beb987fc32dccaa2782415e95801347ef762d9e6bd97a9517e3eadaa1b2384322747d7aeebd48b9ca53438e53bb3be7126061dcd0",
+          "sha256": "0aa2b1ef0e00c4789a34e3fdbdac9d61486b9f18bdcd5db49334694d2f9d0404",
+          "sha1": "03c742ea3b1c82b70349e006d293126cd7666718",
+          "md5": "a30ec6ef61c0fd0e9049f89839bb54ed"
+        }
+      ]
+    },
+    {
+      "name": "runtimeElements",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.jvm.environment": "standard-jvm",
+        "org.gradle.jvm.version": 17,
+        "org.gradle.libraryelements": "jar",
+        "org.gradle.usage": "java-runtime",
+        "org.jetbrains.kotlin.platform.type": "jvm"
+      },
+      "dependencies": [
+        {
+          "group": "org.json",
+          "module": "json",
+          "version": {
+            "requires": "20250517"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "1.9.24"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "oepm-0.1.0-SNAPSHOT.jar",
+          "url": "oepm-0.1.0-SNAPSHOT.jar",
+          "size": 52615,
+          "sha512": "9ec38c187658d531f05e787beb987fc32dccaa2782415e95801347ef762d9e6bd97a9517e3eadaa1b2384322747d7aeebd48b9ca53438e53bb3be7126061dcd0",
+          "sha256": "0aa2b1ef0e00c4789a34e3fdbdac9d61486b9f18bdcd5db49334694d2f9d0404",
+          "sha1": "03c742ea3b1c82b70349e006d293126cd7666718",
+          "md5": "a30ec6ef61c0fd0e9049f89839bb54ed"
+        }
+      ]
+    }
+  ]
+}
