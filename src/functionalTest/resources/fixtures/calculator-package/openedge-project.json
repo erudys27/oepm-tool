@@ -1,0 +1,15 @@
+{
+  "name": "calculator-package",
+  "version": "1.0.0",
+  "oeversion": "12.8",
+  "package_name": "example.calculator",
+  "dependencies": {
+    "example.greeter": "^1.0.0"
+  },
+  "buildPath": [
+    {
+      "type": "source",
+      "path": "src"
+    }
+  ]
+}

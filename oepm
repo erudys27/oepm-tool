@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Thin syntax wrapper around the oepmInstall/oepmPropath Gradle tasks —
+# see NEXT-STEPS.md. Not a standalone CLI: it locates gradlew relative to
+# itself and forwards to whatever Gradle project it's run from, which must
+# already apply the oepm plugin (id("io.github.erudys27.oepm")).
+set -e
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GRADLEW="$DIR/gradlew"
+
+usage() {
+    echo "Usage:"
+    echo "  oepm install                          resolve declared dependencies"
+    echo "  oepm install <package>[:<versionSpec>] add + resolve a dependency in one step"
+    echo "  oepm propath                           print the generated PROPATH"
+    exit 1
+}
+
+[ "$#" -ge 1 ] || usage
+
+command="$1"
+shift
+
+case "$command" in
+    install)
+        if [ "$#" -eq 0 ]; then
+            "$GRADLEW" oepmInstall
+        elif [ "$#" -eq 1 ]; then
+            "$GRADLEW" oepmInstall "-PoepmAdd=$1"
+        else
+            usage
+        fi
+        ;;
+    propath)
+        [ "$#" -eq 0 ] || usage
+        "$GRADLEW" oepmPropath
+        ;;
+    *)
+        usage
+        ;;
+esac

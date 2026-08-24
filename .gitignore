@@ -1,0 +1,23 @@
+bin/
+*.r
+.builder/
+.DS_Store
+Thumbs.db
+oepm_packages/
+*.log
+
+# OpenEdge session temp files
+lbi*
+rcd*
+srt*
+
+# Gradle / Kotlin
+.gradle/
+build/
+.kotlin/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
