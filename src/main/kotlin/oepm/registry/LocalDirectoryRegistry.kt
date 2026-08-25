@@ -32,29 +32,16 @@ class LocalDirectoryRegistry(private val root: File) : Registry {
     override fun findAny(packageName: String): ResolvedPackage? {
         require(root.isDirectory) { "Registry root not found or not a directory: ${root.path}" }
 
-        val candidates = root.listFiles { file -> file.isDirectory }.orEmpty()
-
-        val matches =
-            candidates
+        val candidates =
+            root.listFiles { file -> file.isDirectory }.orEmpty()
                 .mapNotNull { candidateDir ->
                     val manifestFile = File(candidateDir, "openedge-project.json")
                     if (!manifestFile.exists()) return@mapNotNull null
-
-                    val manifest = ManifestReader.read(manifestFile)
-                    if (manifest.packageName != packageName) return@mapNotNull null
-
-                    candidateDir to manifest
+                    candidateDir to ManifestReader.read(manifestFile)
                 }.sortedBy { (candidateDir, _) -> candidateDir.name }
 
-        if (matches.size > 1) {
-            val locations = matches.joinToString(", ") { (candidateDir, _) -> candidateDir.path }
-            throw IllegalStateException(
-                "Multiple packages named \"$packageName\" found under registry root ${root.path}: $locations. " +
-                    "package_name must be unique across the registry.",
-            )
-        }
-
-        val (candidateDir, manifest) = matches.singleOrNull() ?: return null
+        val (candidateDir, manifest) =
+            PackageMatcher.selectUnique(candidates, packageName, describeLocation = { it.path }) ?: return null
 
         val packageRoot =
             manifest.sourceRoots.firstOrNull()

@@ -4,22 +4,64 @@ import oepm.manifest.BuildPathUpdater
 import oepm.manifest.DependenciesUpdater
 import oepm.manifest.ManifestReader
 import oepm.propath.PropathGenerator
+import oepm.registry.CatalogRegistry
 import oepm.registry.LocalDirectoryRegistry
+import oepm.registry.PrefixRoutingRegistry
 import oepm.registry.Registry
 import oepm.resolver.DependencyResolver
+import org.gradle.api.Named
+import org.gradle.api.NamedDomainObjectContainer
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.model.ObjectFactory
+import org.gradle.api.provider.Property
 import org.json.JSONObject
+import java.io.File
+import javax.inject.Inject
 
-abstract class OepmExtension {
-    abstract val registryRoot: DirectoryProperty
-}
+/**
+ * One remote, catalog-backed registry configuration entry — see
+ * oepm.registry.CatalogRegistry. "name" is just the DSL entry's own label
+ * (e.g. "ba"); "prefix" is the actual routing key matched against
+ * package_name (e.g. "ba.").
+ */
+abstract class GitRegistrySpec
+    @Inject
+    constructor(private val entryName: String) : Named {
+        abstract val prefix: Property<String>
+        abstract val catalogUrl: Property<String>
+        abstract val catalogRef: Property<String>
+
+        override fun getName() = entryName
+    }
+
+abstract class OepmExtension
+    @Inject
+    constructor(objects: ObjectFactory) {
+        abstract val registryRoot: DirectoryProperty
+        abstract val cacheDir: DirectoryProperty
+
+        val registries: NamedDomainObjectContainer<GitRegistrySpec> =
+            objects.domainObjectContainer(GitRegistrySpec::class.java) { name ->
+                objects.newInstance(GitRegistrySpec::class.java, name)
+            }
+    }
 
 class OepmPlugin : Plugin<Project> {
     override fun apply(project: Project) {
         val extension = project.extensions.create("oepm", OepmExtension::class.java)
         extension.registryRoot.convention(project.layout.projectDirectory)
+        extension.cacheDir.convention(
+            project.layout.dir(
+                project.provider {
+                    File(
+                        project.findProperty("oepmCacheDir") as? String
+                            ?: "${System.getProperty("user.home")}/.oepm/cache",
+                    )
+                },
+            ),
+        )
 
         project.tasks.register("oepmInstall") { task ->
             task.group = "oepm"
@@ -28,7 +70,7 @@ class OepmPlugin : Plugin<Project> {
                 "Pass -PoepmAdd=<package_name>[:<versionSpec>] to add and resolve a new dependency in one step."
             task.doLast {
                 val manifestFile = project.projectDir.resolve("openedge-project.json")
-                val registry = LocalDirectoryRegistry(extension.registryRoot.get().asFile)
+                val registry = buildRegistry(extension)
                 val manifest = ManifestReader.read(manifestFile)
 
                 // -PoepmAdd is only resolved to a (packageName, versionSpec)
@@ -99,6 +141,41 @@ class OepmPlugin : Plugin<Project> {
             }
         }
     }
+}
+
+/**
+ * If no remote registries are configured, behaves exactly as before
+ * (LocalDirectoryRegistry against registryRoot) for backward compatibility.
+ * Otherwise builds a PrefixRoutingRegistry over the configured registries
+ * — registryRoot is not silently merged in, to avoid an ambiguous
+ * "no prefix matched, fall back to local?" behavior.
+ */
+private fun buildRegistry(extension: OepmExtension): Registry {
+    if (extension.registries.isEmpty()) {
+        return LocalDirectoryRegistry(extension.registryRoot.get().asFile)
+    }
+
+    val cacheRoot = extension.cacheDir.get().asFile
+    val ownerByPrefix = LinkedHashMap<String, String>()
+    val delegatesByPrefix = LinkedHashMap<String, Registry>()
+    for (spec in extension.registries) {
+        val prefix = spec.prefix.get()
+        val existingOwner = ownerByPrefix[prefix]
+        require(existingOwner == null) {
+            "Duplicate registry prefix \"$prefix\": both \"$existingOwner\" and \"${spec.name}\" declare it"
+        }
+        ownerByPrefix[prefix] = spec.name
+
+        delegatesByPrefix[prefix] =
+            CatalogRegistry(
+                registryName = spec.name,
+                catalogUrl = spec.catalogUrl.get(),
+                catalogRef = spec.catalogRef.getOrElse("main"),
+                cacheDir = File(cacheRoot, spec.name),
+            )
+    }
+
+    return PrefixRoutingRegistry(delegatesByPrefix)
 }
 
 /**
