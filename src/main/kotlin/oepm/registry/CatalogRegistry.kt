@@ -10,20 +10,37 @@ import java.io.File
 
 /**
  * Registry backed by a small "catalog" git repo that holds no package
- * content itself — only one reference file per package
- * (packages/<package_name>.json) pointing at that package's own dedicated
- * repo URL + tag. Fetching a package is a plain shallow clone of that
- * dedicated repo, no partial-clone machinery involved: the catalog is
+ * content itself — only one reference file per package version
+ * (packages/<local_name>/<version>.json) pointing at that package's own
+ * dedicated repo URL + tag. Fetching a package is a plain shallow clone of
+ * that dedicated repo, no partial-clone machinery involved: the catalog is
  * small enough to clone in full, and each package repo is small and
  * dedicated to one package.
+ *
+ * "local_name" is packageName (e.g. "ba.calculator") with the registry's
+ * own configured prefix stripped (e.g. "calculator"). The routing prefix
+ * is purely a lookup key — it's not part of the package's own identity:
+ * package_name inside a package's own manifest, and its actual OO ABL
+ * namespace, stay whatever that package's own author chose ("calculator",
+ * no "ba." baked in). Every package in one catalog shares the same
+ * registry, so the prefix is redundant inside that catalog's own folder
+ * names. The ResolvedPackage returned still carries the full, prefixed
+ * packageName — that's the public identity used everywhere outside this
+ * class (oepm.lock, oepm_packages/, dependency map keys).
+ *
+ * The folder-per-package layout is prep for future multi-version registry
+ * support (see NEXT-STEPS.md) — v1 itself still only supports exactly one
+ * version per package, same as LocalDirectoryRegistry: more than one
+ * version file under a package's folder is a loud error, not a selection.
  *
  * Cache layout under cacheDir (one CatalogRegistry per configured
  * registry, so cacheDir is already scoped to this registry's name):
  *   _catalog/                 full clone of the catalog repo
- *   <package_name>/           shallow clone of that package's own repo
+ *   <local_name>/             shallow clone of that package's own repo
  */
 class CatalogRegistry(
     private val registryName: String,
+    private val prefix: String,
     private val catalogUrl: String,
     private val catalogRef: String,
     private val cacheDir: File,
@@ -49,13 +66,17 @@ class CatalogRegistry(
     }
 
     override fun findAny(packageName: String): ResolvedPackage? {
+        require(packageName.startsWith(prefix)) {
+            "\"$packageName\" doesn't start with registry \"$registryName\"'s configured prefix \"$prefix\" " +
+                "— this registry should only ever be asked about names PrefixRoutingRegistry already routed to it"
+        }
+        val localName = packageName.removePrefix(prefix)
+
         ensureCatalogCloned()
 
-        val referenceFile = File(catalogDir, "packages/$packageName.json")
-        if (!referenceFile.exists()) return null
-
+        val referenceFile = findReferenceFile(localName, packageName) ?: return null
         val reference = readReference(referenceFile, packageName)
-        val packageDir = File(cacheDir, packageName)
+        val packageDir = File(cacheDir, localName)
         ensurePackageCloned(reference, packageDir, packageName)
 
         val manifestFile = File(packageDir, "openedge-project.json")
@@ -77,6 +98,29 @@ class CatalogRegistry(
             sourceDir = File(packageDir, packageRoot),
             projectDir = packageDir,
         )
+    }
+
+    /**
+     * v1 has no version selection: a package folder with more than one
+     * version file is a loud error, not a pick. See class doc. Looks up by
+     * localName (prefix stripped); error messages still name the full,
+     * public packageName so a failure is recognizable from the outside.
+     */
+    private fun findReferenceFile(localName: String, packageName: String): File? {
+        val packageDir = File(catalogDir, "packages/$localName")
+        if (!packageDir.isDirectory) return null
+
+        val versionFiles = packageDir.listFiles { file -> file.isFile && file.extension == "json" }.orEmpty()
+        return when (versionFiles.size) {
+            0 -> null
+            1 -> versionFiles.single()
+            else ->
+                throw IllegalStateException(
+                    "Registry \"$registryName\" catalog has multiple versions of \"$packageName\" " +
+                        "(${versionFiles.joinToString(", ") { it.name }}), but v1 does not support " +
+                        "selecting among multiple versions yet.",
+                )
+        }
     }
 
     private fun ensureCatalogCloned() {

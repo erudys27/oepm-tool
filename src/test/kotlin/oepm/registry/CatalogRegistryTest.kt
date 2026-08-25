@@ -50,10 +50,10 @@ class CatalogRegistryTest {
     private fun catalogRepo(root: File, references: Map<String, Pair<File, String>>): File {
         val dir = File(root, "catalog")
         initRepo(dir)
-        File(dir, "packages").mkdirs()
         for ((packageName, repoAndVersion) in references) {
             val (repoDir, version) = repoAndVersion
-            File(dir, "packages/$packageName.json").writeText(
+            File(dir, "packages/$packageName").mkdirs()
+            File(dir, "packages/$packageName/$version.json").writeText(
                 """
                 { "repoUrl": "${repoDir.absolutePath.replace("\\", "\\\\")}", "version": "$version", "ref": "v$version" }
                 """.trimIndent(),
@@ -62,6 +62,9 @@ class CatalogRegistryTest {
         commitAll(dir, "initial")
         return dir
     }
+
+    private fun registry(catalog: File, cacheDir: File, prefix: String = "") =
+        CatalogRegistry("test", prefix, catalog.absolutePath, "main", cacheDir)
 
     @Test
     fun `resolves a package via the catalog and fetches only that package`() {
@@ -75,7 +78,7 @@ class CatalogRegistryTest {
             )
 
         val cacheDir = createTempDirectory("oepm-catalog-cache").toFile()
-        val registry = CatalogRegistry("test", catalog.absolutePath, "main", cacheDir)
+        val registry = registry(catalog, cacheDir)
 
         val resolved = registry.findAny("example.calculator")
 
@@ -93,7 +96,7 @@ class CatalogRegistryTest {
         val catalog = catalogRepo(remotesRoot, mapOf("example.calculator" to (calculatorRepo to "1.0.0")))
 
         val cacheDir = createTempDirectory("oepm-catalog-cache").toFile()
-        val registry = CatalogRegistry("test", catalog.absolutePath, "main", cacheDir)
+        val registry = registry(catalog, cacheDir)
 
         assertEquals("1.0.0", registry.resolve("example.calculator", "^1.0.0").version)
         assertFailsWith<IllegalStateException> { registry.resolve("example.calculator", "^2.0.0") }
@@ -106,7 +109,7 @@ class CatalogRegistryTest {
         val catalog = catalogRepo(remotesRoot, mapOf("example.calculator" to (calculatorRepo to "1.0.0")))
 
         val cacheDir = createTempDirectory("oepm-catalog-cache").toFile()
-        val registry = CatalogRegistry("test", catalog.absolutePath, "main", cacheDir)
+        val registry = registry(catalog, cacheDir)
 
         assertNull(registry.findAny("example.other"))
     }
@@ -118,7 +121,7 @@ class CatalogRegistryTest {
         val catalog = catalogRepo(remotesRoot, mapOf("example.calculator" to (calculatorRepo to "1.0.0")))
 
         val cacheDir = createTempDirectory("oepm-catalog-cache").toFile()
-        val registry = CatalogRegistry("test", catalog.absolutePath, "main", cacheDir)
+        val registry = registry(catalog, cacheDir)
 
         registry.findAny("example.calculator")
         val second = registry.findAny("example.calculator")
@@ -136,12 +139,65 @@ class CatalogRegistryTest {
         val catalog = catalogRepo(remotesRoot, mapOf("example.calculator" to (calculatorRepo to "1.0.0")))
 
         val cacheDir = createTempDirectory("oepm-catalog-cache").toFile()
-        val registry = CatalogRegistry("test", catalog.absolutePath, "main", cacheDir)
+        val registry = registry(catalog, cacheDir)
 
         registry.findAny("example.calculator")
 
         val packageDir = File(cacheDir, "example.calculator")
         val commitCount = git(packageDir, "rev-list", "--count", "HEAD").trim()
         assertEquals("1", commitCount)
+    }
+
+    @Test
+    fun `throws when a package's catalog folder has more than one version file`() {
+        val remotesRoot = createTempDirectory("oepm-catalog-remotes").toFile()
+        val calculatorRepoV1 = packageRepo(remotesRoot, "calculator-package-v1", "example.calculator", "1.0.0")
+        val catalog = catalogRepo(remotesRoot, mapOf("example.calculator" to (calculatorRepoV1 to "1.0.0")))
+        // Simulate a second version file landing in the same package folder
+        // (not yet reachable via catalogRepo() since v1 only ever writes one).
+        File(catalog, "packages/example.calculator/2.0.0.json").writeText(
+            """{ "repoUrl": "${calculatorRepoV1.absolutePath.replace("\\", "\\\\")}", "version": "2.0.0", "ref": "v1.0.0" }""",
+        )
+        git(catalog, "add", "-A")
+        git(catalog, "commit", "-m", "add a second version file")
+
+        val cacheDir = createTempDirectory("oepm-catalog-cache").toFile()
+        val registry = registry(catalog, cacheDir)
+
+        val exception = assertFailsWith<IllegalStateException> { registry.findAny("example.calculator") }
+
+        assertTrue(exception.message!!.contains("example.calculator"))
+        assertTrue(exception.message!!.contains("1.0.0.json"))
+        assertTrue(exception.message!!.contains("2.0.0.json"))
+    }
+
+    @Test
+    fun `strips the configured prefix for catalog and cache paths, but keeps the full name as the public identity`() {
+        val remotesRoot = createTempDirectory("oepm-catalog-remotes").toFile()
+        // The package's own manifest/namespace has no "ba." prefix at all -
+        // the prefix is purely a routing key, not part of the package's own identity.
+        val calculatorRepo = packageRepo(remotesRoot, "calculator-package", "calculator", "1.0.0")
+        val catalog = catalogRepo(remotesRoot, mapOf("calculator" to (calculatorRepo to "1.0.0")))
+
+        val cacheDir = createTempDirectory("oepm-catalog-cache").toFile()
+        val registry = registry(catalog, cacheDir, prefix = "ba.")
+
+        val resolved = registry.findAny("ba.calculator")
+
+        assertEquals("ba.calculator", resolved?.packageName)
+        assertTrue(File(cacheDir, "calculator/.git").exists())
+        assertFalse(File(cacheDir, "ba.calculator").exists())
+    }
+
+    @Test
+    fun `rejects a package name that doesn't start with the configured prefix`() {
+        val remotesRoot = createTempDirectory("oepm-catalog-remotes").toFile()
+        val calculatorRepo = packageRepo(remotesRoot, "calculator-package", "calculator", "1.0.0")
+        val catalog = catalogRepo(remotesRoot, mapOf("calculator" to (calculatorRepo to "1.0.0")))
+
+        val cacheDir = createTempDirectory("oepm-catalog-cache").toFile()
+        val registry = registry(catalog, cacheDir, prefix = "ba.")
+
+        assertFailsWith<IllegalArgumentException> { registry.findAny("cw.calculator") }
     }
 }

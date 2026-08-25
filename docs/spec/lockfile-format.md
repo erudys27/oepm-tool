@@ -49,10 +49,22 @@ walkthrough's hand-written `oepm.lock` predates this decision and still
 has a `propath_order` key — that field is now considered vestigial there,
 not a model to copy.
 
+## Decided: integrity hashing scheme
+
+`oepm.integrity.DirectoryHash` (2026-08-25): hashes the *installed*
+`oepm_packages/<name>/src` tree, not registry-specific fetch metadata (no
+git commit SHA, no registry-side hash) - so it works the same way
+regardless of which `Registry` resolved the package
+(`LocalDirectoryRegistry`, `CatalogRegistry`, ...), and verifies what's
+actually on disk after install, not just what was fetched. Modeled on Go's
+dirhash Hash1: every file gets its own sha256, then a manifest of
+`<file hash>  <relative path>` lines sorted by path gets hashed again -
+sorting makes the result independent of directory-walk order and OS path
+separators, and hashing per-file (not concatenating raw bytes) makes a
+rename register as a change even if file content is identical.
+
 ## Open questions
 
-- Integrity hashing scheme - needed even for the local-directory registry,
-  to detect a package changing under an already-resolved version.
 - Whether a version conflict between two dependencies should always be a
   hard failure (current behavior, `oepm/resolver/DependencyResolver`) or
   should support an opt-in resolution strategy — several considered

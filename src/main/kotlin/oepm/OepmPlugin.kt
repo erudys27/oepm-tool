@@ -1,5 +1,8 @@
 package oepm
 
+import oepm.integrity.DirectoryHash
+import oepm.lock.IntegrityChecker
+import oepm.lock.LockfileReader
 import oepm.manifest.BuildPathUpdater
 import oepm.manifest.DependenciesUpdater
 import oepm.manifest.ManifestReader
@@ -93,8 +96,24 @@ class OepmPlugin : Plugin<Project> {
                 // dependencies — a resolved package's own declared
                 // dependencies are resolved too, recursively (see
                 // oepm.resolver.DependencyResolver).
+                val resolvedPackages = DependencyResolver.resolveAll(dependenciesToResolve, registry)
+
+                // Verify every package against oepm.lock's existing entries
+                // *before* touching oepm_packages/ - if a registry served
+                // different content for an already-locked version (e.g. a
+                // force-moved git tag), fail loudly before anything on
+                // disk changes, not after. Hashed once here and reused
+                // below when writing the new lockfile.
+                val existingLock = LockfileReader.read(project.projectDir.resolve("oepm.lock"))
+                val integrities =
+                    resolvedPackages.mapValues { (packageName, resolvedPackage) ->
+                        val integrity = DirectoryHash.hash(resolvedPackage.sourceDir)
+                        IntegrityChecker.verify(packageName, resolvedPackage.version, integrity, existingLock)
+                        integrity
+                    }
+
                 val resolved =
-                    DependencyResolver.resolveAll(dependenciesToResolve, registry).mapValues { (packageName, resolvedPackage) ->
+                    resolvedPackages.mapValues { (packageName, resolvedPackage) ->
                         val destination =
                             project.projectDir
                                 .resolve("oepm_packages")
@@ -118,7 +137,7 @@ class OepmPlugin : Plugin<Project> {
                         JSONObject()
                             .put("version", resolvedPackage.version)
                             .put("source", resolvedPackage.sourceDir.absolutePath)
-                            .put("integrity", "sha256:NOT-YET-IMPLEMENTED"),
+                            .put("integrity", integrities.getValue(packageName)),
                     )
                 }
                 val lockJson = JSONObject().put("resolved", resolvedJson)
@@ -169,6 +188,7 @@ private fun buildRegistry(extension: OepmExtension): Registry {
         delegatesByPrefix[prefix] =
             CatalogRegistry(
                 registryName = spec.name,
+                prefix = prefix,
                 catalogUrl = spec.catalogUrl.get(),
                 catalogRef = spec.catalogRef.getOrElse("main"),
                 cacheDir = File(cacheRoot, spec.name),
