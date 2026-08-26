@@ -279,4 +279,48 @@ class DependencyResolverTest {
             "Expected a conflicting-kinds error, got: ${error.message}",
         )
     }
+
+    // --- PROPATH namespace collisions ---
+
+    @Test
+    fun `two resolved packages sharing the same real package_name fail loudly, even under different keys`() {
+        val remotesRoot = createTempDirectory("oepm-resolver-direct-test").toFile()
+        val kgRepo = directSourceRepo(remotesRoot, "calculator-kg-repo", "calculator", "1.0.0")
+        val lbsRepo = directSourceRepo(remotesRoot, "calculator-lbs-repo", "calculator", "1.0.0")
+
+        val error =
+            assertFailsWith<IllegalStateException> {
+                DependencyResolver.resolveAll(
+                    mapOf(
+                        "calculatorKg" to DependencySpec.DirectSource(kgRepo.absolutePath, "v1.0.0"),
+                        "calculatorLbs" to DependencySpec.DirectSource(lbsRepo.absolutePath, "v1.0.0"),
+                    ),
+                    PoisonRegistry,
+                    directSourceCacheDir(),
+                )
+            }
+        assertTrue(error.message!!.contains("PROPATH namespace collision"))
+        assertTrue(error.message!!.contains("calculatorKg"))
+        assertTrue(error.message!!.contains("calculatorLbs"))
+        assertTrue(error.message!!.contains("\"calculator\""))
+    }
+
+    @Test
+    fun `packages with different real package_names resolve fine together`() {
+        val remotesRoot = createTempDirectory("oepm-resolver-direct-test").toFile()
+        val calculatorRepo = directSourceRepo(remotesRoot, "calculator-repo", "calculator", "1.0.0")
+        val greeterRepo = directSourceRepo(remotesRoot, "greeter-repo", "greeter", "1.0.0")
+
+        val resolved =
+            DependencyResolver.resolveAll(
+                mapOf(
+                    "calculator" to DependencySpec.DirectSource(calculatorRepo.absolutePath, "v1.0.0"),
+                    "greeter" to DependencySpec.DirectSource(greeterRepo.absolutePath, "v1.0.0"),
+                ),
+                PoisonRegistry,
+                directSourceCacheDir(),
+            )
+
+        assertEquals(setOf("calculator", "greeter"), resolved.keys)
+    }
 }

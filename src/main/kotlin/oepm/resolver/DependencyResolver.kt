@@ -35,6 +35,18 @@ import java.io.File
  * DirectSource dependency somewhere in the graph. A true circular
  * dependency (A -> B -> A, neither finished resolving) is also an error,
  * not a silent short-circuit.
+ *
+ * A resolved package's *own* declared package_name (its real OO ABL
+ * namespace - see oepm.manifest.Manifest) is independent of the key it was
+ * resolved under (see DependencySpec.DirectSource's prefix-inheritance
+ * above), so two different keys can end up resolving to packages sharing
+ * the same real namespace (e.g. two independently-fetched "calculator"
+ * packages, routed/declared under different keys). PROPATH is a single
+ * flat, ordered list with no ambiguity detection of its own - whichever
+ * one lands first on PROPATH silently shadows the other, with no compile
+ * error. checkNoNamespaceCollision below catches this at resolve time
+ * instead, once the whole graph is known, so it's a loud, named failure
+ * rather than a silently-wrong PROPATH.
  */
 object DependencyResolver {
     fun resolveAll(
@@ -44,10 +56,13 @@ object DependencyResolver {
     ): Map<String, ResolvedPackage> {
         val resolved = LinkedHashMap<String, ResolvedPackage>()
         val resolvedSpecs = HashMap<String, DependencySpec>()
+        val namespaceByKey = HashMap<String, String>()
 
         for ((packageName, spec) in rootDependencies) {
-            resolveOne(packageName, spec, path = emptyList(), resolved, resolvedSpecs, registry, directSourceCacheDir)
+            resolveOne(packageName, spec, path = emptyList(), resolved, resolvedSpecs, namespaceByKey, registry, directSourceCacheDir)
         }
+
+        checkNoNamespaceCollision(namespaceByKey)
 
         return resolved
     }
@@ -58,6 +73,7 @@ object DependencyResolver {
         path: List<String>,
         resolved: MutableMap<String, ResolvedPackage>,
         resolvedSpecs: MutableMap<String, DependencySpec>,
+        namespaceByKey: MutableMap<String, String>,
         registry: Registry,
         directSourceCacheDir: File,
     ) {
@@ -83,13 +99,40 @@ object DependencyResolver {
         val ownManifestFile = resolvedPackage.projectDir.resolve("openedge-project.json")
         if (ownManifestFile.exists()) {
             val ownManifest = ManifestReader.read(ownManifestFile)
+            namespaceByKey[packageKey] = ownManifest.packageName
             for ((depName, depSpec) in ownManifest.dependencies) {
                 val childKey =
                     when (depSpec) {
                         is DependencySpec.Registry -> depName
                         is DependencySpec.DirectSource -> (resolvedPackage.resolvedPrefix ?: "") + depName
                     }
-                resolveOne(childKey, depSpec, path + packageKey, resolved, resolvedSpecs, registry, directSourceCacheDir)
+                resolveOne(
+                    childKey,
+                    depSpec,
+                    path + packageKey,
+                    resolved,
+                    resolvedSpecs,
+                    namespaceByKey,
+                    registry,
+                    directSourceCacheDir,
+                )
+            }
+        }
+    }
+
+    /**
+     * Two different resolved keys sharing the same real package_name would
+     * silently shadow each other on PROPATH (see class doc) - fail loudly
+     * instead, before anything gets copied into oepm_packages/.
+     */
+    private fun checkNoNamespaceCollision(namespaceByKey: Map<String, String>) {
+        val keysByNamespace = namespaceByKey.entries.groupBy({ it.value }, { it.key })
+        for ((namespace, keys) in keysByNamespace) {
+            check(keys.size == 1) {
+                "PROPATH namespace collision: ${keys.sorted().joinToString(" and ")} both declare the same " +
+                    "OO ABL namespace \"$namespace\" in their own package_name. Only one would actually be " +
+                    "reachable on PROPATH (whichever comes first), silently shadowing the other. Rename one " +
+                    "package's own package_name/namespace so they no longer collide."
             }
         }
     }
