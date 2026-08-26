@@ -98,7 +98,7 @@ class ManifestReaderTest {
         assertEquals("consumer-app", manifest.name)
         assertEquals("1.0.0", manifest.version)
         assertEquals("example.consumer", manifest.packageName)
-        assertEquals(mapOf("example.calculator" to "^1.0.0"), manifest.dependencies)
+        assertEquals(mapOf("example.calculator" to DependencySpec.Registry("^1.0.0")), manifest.dependencies)
         assertEquals(listOf("src"), manifest.sourceRoots)
     }
 
@@ -123,5 +123,68 @@ class ManifestReaderTest {
         val manifest = ManifestReader.read(file.toFile())
 
         assertEquals(listOf("src", "oepm_packages/example.calculator/src"), manifest.sourceRoots)
+    }
+
+    @Test
+    fun `parses a direct-source dependency`() {
+        val file = createTempFile(suffix = ".json")
+        file.writeText(
+            """
+            {
+              "name": "calculator-package",
+              "version": "1.0.0",
+              "package_name": "calculator",
+              "dependencies": { "greeter": { "repoUrl": "https://example.com/greeter.git", "ref": "v1.0.1" } },
+              "buildPath": [{ "type": "source", "path": "src" }]
+            }
+            """.trimIndent(),
+        )
+
+        val manifest = ManifestReader.read(file.toFile())
+
+        assertEquals(
+            mapOf("greeter" to DependencySpec.DirectSource("https://example.com/greeter.git", "v1.0.1")),
+            manifest.dependencies,
+        )
+    }
+
+    @Test
+    fun `throws when a direct-source dependency is missing repoUrl or ref`() {
+        val file = createTempFile(suffix = ".json")
+        file.writeText(
+            """
+            {
+              "name": "calculator-package",
+              "version": "1.0.0",
+              "package_name": "calculator",
+              "dependencies": { "greeter": { "ref": "v1.0.1" } },
+              "buildPath": [{ "type": "source", "path": "src" }]
+            }
+            """.trimIndent(),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            ManifestReader.read(file.toFile())
+        }
+    }
+
+    @Test
+    fun `throws when a dependency entry is neither a version string nor a repoUrl-ref object`() {
+        val file = createTempFile(suffix = ".json")
+        file.writeText(
+            """
+            {
+              "name": "calculator-package",
+              "version": "1.0.0",
+              "package_name": "calculator",
+              "dependencies": { "greeter": 42 },
+              "buildPath": [{ "type": "source", "path": "src" }]
+            }
+            """.trimIndent(),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            ManifestReader.read(file.toFile())
+        }
     }
 }

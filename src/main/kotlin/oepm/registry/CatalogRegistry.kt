@@ -1,7 +1,7 @@
 package oepm.registry
 
 import oepm.fetch.GitCli
-import oepm.manifest.ManifestReader
+import oepm.fetch.GitPackageFetcher
 import oepm.version.CaretRange
 import oepm.version.SemVer
 import org.json.JSONException
@@ -77,27 +77,8 @@ class CatalogRegistry(
         val referenceFile = findReferenceFile(localName, packageName) ?: return null
         val reference = readReference(referenceFile, packageName)
         val packageDir = File(cacheDir, localName)
-        ensurePackageCloned(reference, packageDir, packageName)
 
-        val manifestFile = File(packageDir, "openedge-project.json")
-        require(manifestFile.exists()) {
-            "\"$packageName\" was fetched from ${reference.repoUrl} (ref ${reference.ref}) into " +
-                "${packageDir.path}, but it has no openedge-project.json"
-        }
-        val manifest = ManifestReader.read(manifestFile)
-
-        val packageRoot =
-            manifest.sourceRoots.firstOrNull()
-                ?: throw IllegalStateException(
-                    "\"$packageName\" at ${packageDir.path} has no buildPath source entry to serve as its package_root",
-                )
-
-        return ResolvedPackage(
-            packageName = packageName,
-            version = manifest.version,
-            sourceDir = File(packageDir, packageRoot),
-            projectDir = packageDir,
-        )
+        return GitPackageFetcher.fetch(packageName, reference.repoUrl, reference.ref, packageDir)
     }
 
     /**
@@ -132,21 +113,6 @@ class CatalogRegistry(
 
         cacheDir.mkdirs()
         GitCli.run(null, "clone", "--branch", catalogRef, catalogUrl, catalogDir.path)
-    }
-
-    private fun ensurePackageCloned(reference: PackageReference, packageDir: File, packageName: String) {
-        if (File(packageDir, ".git").exists()) return
-
-        cacheDir.mkdirs()
-        try {
-            GitCli.run(null, "clone", "--depth", "1", "--branch", reference.ref, reference.repoUrl, packageDir.path)
-        } catch (e: Exception) {
-            throw IllegalStateException(
-                "Failed to fetch \"$packageName\" from ${reference.repoUrl} at ref \"${reference.ref}\" " +
-                    "(registry \"$registryName\"): ${e.message}",
-                e,
-            )
-        }
     }
 
     private data class PackageReference(val repoUrl: String, val ref: String)

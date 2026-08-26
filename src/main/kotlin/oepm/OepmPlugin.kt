@@ -5,6 +5,7 @@ import oepm.lock.IntegrityChecker
 import oepm.lock.LockfileReader
 import oepm.manifest.BuildPathUpdater
 import oepm.manifest.DependenciesUpdater
+import oepm.manifest.DependencySpec
 import oepm.manifest.ManifestReader
 import oepm.propath.PropathGenerator
 import oepm.registry.CatalogRegistry
@@ -90,13 +91,22 @@ class OepmPlugin : Plugin<Project> {
                         null
                     }
                 val dependenciesToResolve =
-                    if (pendingAdd != null) manifest.dependencies + pendingAdd else manifest.dependencies
+                    if (pendingAdd != null) {
+                        val (packageName, versionSpec) = pendingAdd
+                        manifest.dependencies + (packageName to DependencySpec.Registry(versionSpec))
+                    } else {
+                        manifest.dependencies
+                    }
 
                 // Resolves the full dependency graph, not just direct
                 // dependencies — a resolved package's own declared
                 // dependencies are resolved too, recursively (see
-                // oepm.resolver.DependencyResolver).
-                val resolvedPackages = DependencyResolver.resolveAll(dependenciesToResolve, registry)
+                // oepm.resolver.DependencyResolver). directSourceCacheDir
+                // is only used for direct-source dependencies (inline
+                // repoUrl/ref, no registry involved) - auto-created on
+                // demand, same convention as the rest of the cache.
+                val directSourceCacheDir = extension.cacheDir.get().asFile.resolve("_direct")
+                val resolvedPackages = DependencyResolver.resolveAll(dependenciesToResolve, registry, directSourceCacheDir)
 
                 // Verify every package against oepm.lock's existing entries
                 // *before* touching oepm_packages/ - if a registry served

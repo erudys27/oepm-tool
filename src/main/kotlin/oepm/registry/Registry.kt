@@ -11,6 +11,13 @@ data class ResolvedPackage(
     // buildPath[0] source folder. Needed to read the package's own
     // dependencies for transitive resolution (see oepm.resolver.DependencyResolver).
     val projectDir: File,
+    // The registry prefix that routed to this package (e.g. "ba."), null
+    // when it wasn't routed at all (LocalDirectoryRegistry, or a
+    // direct-source dependency). Stamped on by PrefixRoutingRegistry, not
+    // known by individual Registry implementations themselves. Used by
+    // DependencyResolver to inherit a namespace onto this package's own
+    // direct-source dependencies — see oepm.manifest.DependencySpec.
+    val resolvedPrefix: String? = null,
 )
 
 interface Registry {
