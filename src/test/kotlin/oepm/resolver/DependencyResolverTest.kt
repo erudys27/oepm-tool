@@ -1,6 +1,9 @@
 package oepm.resolver
 
+import oepm.manifest.DependencySpec
 import oepm.registry.LocalDirectoryRegistry
+import oepm.registry.Registry
+import oepm.registry.ResolvedPackage
 import java.io.File
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.writeText
@@ -9,8 +12,14 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
+/** version-range convenience for building a root/dependency map in tests. */
+private fun versionMap(vararg pairs: Pair<String, String>): Map<String, DependencySpec> =
+    pairs.associate { (name, spec) -> name to DependencySpec.Registry(spec) }
+
 class DependencyResolverTest {
     private fun registryRoot(): File = createTempDirectory("oepm-resolver-test").toFile()
+
+    private fun directSourceCacheDir(): File = createTempDirectory("oepm-resolver-test-direct").toFile()
 
     private fun addPackage(root: File, packageName: String, version: String, dependencies: Map<String, String> = emptyMap()) {
         val packageDir = File(root, packageName).apply { mkdirs() }
@@ -29,6 +38,23 @@ class DependencyResolverTest {
         File(packageDir, "src").mkdirs()
     }
 
+    /** A package whose own dependencies map is written raw, for direct-source JSON shapes. */
+    private fun addPackageWithRawDeps(root: File, packageName: String, version: String, rawDependenciesJson: String) {
+        val packageDir = File(root, packageName).apply { mkdirs() }
+        File(packageDir, "openedge-project.json").writeText(
+            """
+            {
+              "name": "$packageName-project",
+              "version": "$version",
+              "package_name": "$packageName",
+              "dependencies": { $rawDependenciesJson },
+              "buildPath": [{ "type": "source", "path": "src" }]
+            }
+            """.trimIndent(),
+        )
+        File(packageDir, "src").mkdirs()
+    }
+
     @Test
     fun `resolves a transitive dependency of a direct dependency`() {
         val root = registryRoot()
@@ -36,7 +62,8 @@ class DependencyResolverTest {
         addPackage(root, "example.greeter", "1.0.0")
         val registry = LocalDirectoryRegistry(root)
 
-        val resolved = DependencyResolver.resolveAll(mapOf("example.calculator" to "^1.0.0"), registry)
+        val resolved =
+            DependencyResolver.resolveAll(versionMap("example.calculator" to "^1.0.0"), registry, directSourceCacheDir())
 
         assertEquals(setOf("example.calculator", "example.greeter"), resolved.keys)
         assertEquals("1.0.0", resolved.getValue("example.greeter").version)
@@ -52,8 +79,9 @@ class DependencyResolverTest {
 
         val resolved =
             DependencyResolver.resolveAll(
-                mapOf("example.a" to "^1.0.0", "example.b" to "^1.0.0"),
+                versionMap("example.a" to "^1.0.0", "example.b" to "^1.0.0"),
                 registry,
+                directSourceCacheDir(),
             )
 
         assertEquals(setOf("example.a", "example.b", "example.shared"), resolved.keys)
@@ -71,8 +99,9 @@ class DependencyResolverTest {
         val error =
             assertFailsWith<IllegalStateException> {
                 DependencyResolver.resolveAll(
-                    mapOf("example.a" to "^1.0.0", "example.b" to "^1.0.0"),
+                    versionMap("example.a" to "^1.0.0", "example.b" to "^1.0.0"),
                     registry,
+                    directSourceCacheDir(),
                 )
             }
         assertTrue(error.message!!.contains("Version conflict"), "Expected a version-conflict error, got: ${error.message}")
@@ -87,7 +116,7 @@ class DependencyResolverTest {
 
         val error =
             assertFailsWith<IllegalStateException> {
-                DependencyResolver.resolveAll(mapOf("example.a" to "^1.0.0"), registry)
+                DependencyResolver.resolveAll(versionMap("example.a" to "^1.0.0"), registry, directSourceCacheDir())
             }
         assertTrue(error.message!!.contains("Circular dependency"), "Expected a circular-dependency error, got: ${error.message}")
     }
@@ -98,8 +127,226 @@ class DependencyResolverTest {
         addPackage(root, "example.calculator", "1.0.0")
         val registry = LocalDirectoryRegistry(root)
 
-        val resolved = DependencyResolver.resolveAll(mapOf("example.calculator" to "^1.0.0"), registry)
+        val resolved =
+            DependencyResolver.resolveAll(versionMap("example.calculator" to "^1.0.0"), registry, directSourceCacheDir())
 
         assertEquals(setOf("example.calculator"), resolved.keys)
+    }
+
+    // --- direct-source dependencies ---
+
+    /** Throws if ever called - proves a direct-source dependency never touches the registry. */
+    private object PoisonRegistry : Registry {
+        override fun resolve(packageName: String, versionSpec: String): ResolvedPackage =
+            throw AssertionError("PoisonRegistry.resolve should never be called for a direct-source dependency")
+
+        override fun findAny(packageName: String): ResolvedPackage? =
+            throw AssertionError("PoisonRegistry.findAny should never be called for a direct-source dependency")
+    }
+
+    /** A standalone package repo (its own git history), tagged at its version - used as a direct-source target. */
+    private fun directSourceRepo(root: File, folderName: String, packageName: String, version: String): File {
+        val dir = File(root, folderName)
+        addPackage(root, folderName, version)
+        // addPackage already wrote package_name = folderName; overwrite to the desired packageName.
+        File(dir, "openedge-project.json").writeText(
+            """
+            {
+              "name": "$folderName-project",
+              "version": "$version",
+              "package_name": "$packageName",
+              "dependencies": {},
+              "buildPath": [{ "type": "source", "path": "src" }]
+            }
+            """.trimIndent(),
+        )
+        oepm.fetch.GitCli.run(dir, "init", "-b", "main")
+        oepm.fetch.GitCli.run(dir, "config", "user.email", "oepm-test@example.com")
+        oepm.fetch.GitCli.run(dir, "config", "user.name", "oepm test")
+        oepm.fetch.GitCli.run(dir, "add", "-A")
+        oepm.fetch.GitCli.run(dir, "commit", "-m", "initial")
+        oepm.fetch.GitCli.run(dir, "tag", "v$version")
+        return dir
+    }
+
+    @Test
+    fun `a root-level direct-source dependency resolves without touching the registry, keeping its bare name`() {
+        val remotesRoot = createTempDirectory("oepm-resolver-direct-test").toFile()
+        val greeterRepo = directSourceRepo(remotesRoot, "greeter-repo", "greeter", "1.0.1")
+
+        val resolved =
+            DependencyResolver.resolveAll(
+                mapOf("greeter" to DependencySpec.DirectSource(greeterRepo.absolutePath, "v1.0.1")),
+                PoisonRegistry,
+                directSourceCacheDir(),
+            )
+
+        assertEquals(setOf("greeter"), resolved.keys)
+        assertEquals("1.0.1", resolved.getValue("greeter").version)
+    }
+
+    @Test
+    fun `a transitive direct-source dependency keeps its own bare declared name, no inherited prefix`() {
+        val remotesRoot = createTempDirectory("oepm-resolver-direct-test").toFile()
+        val greeterRepo = directSourceRepo(remotesRoot, "greeter-repo", "greeter", "1.0.1")
+
+        val calculatorRegistryRoot = registryRoot()
+        addPackageWithRawDeps(
+            calculatorRegistryRoot,
+            // LocalDirectoryRegistry matches by manifest package_name exactly (no prefix-stripping of its
+            // own, unlike CatalogRegistry) - so the fixture's package_name has to be the full routed name.
+            "ba.calculator",
+            "1.0.1",
+            """"greeter": { "repoUrl": "${greeterRepo.absolutePath.replace("\\", "\\\\")}", "ref": "v1.0.1" }""",
+        )
+        val delegate = LocalDirectoryRegistry(calculatorRegistryRoot)
+        val prefixRegistry = oepm.registry.PrefixRoutingRegistry(mapOf("ba." to delegate))
+
+        val resolved =
+            DependencyResolver.resolveAll(
+                versionMap("ba.calculator" to "^1.0.0"),
+                prefixRegistry,
+                directSourceCacheDir(),
+            )
+
+        assertEquals(setOf("ba.calculator", "greeter"), resolved.keys)
+        assertEquals("1.0.1", resolved.getValue("greeter").version)
+    }
+
+    @Test
+    fun `the same direct-source dependency declared by two differently-routed parents is deduped, not a collision`() {
+        val remotesRoot = createTempDirectory("oepm-resolver-direct-test").toFile()
+        val greeterRepo = directSourceRepo(remotesRoot, "greeter-repo", "greeter", "1.0.1")
+        val sharedDepJson =
+            """"greeter": { "repoUrl": "${greeterRepo.absolutePath.replace("\\", "\\\\")}", "ref": "v1.0.1" }"""
+
+        val registryRootDir = registryRoot()
+        addPackageWithRawDeps(registryRootDir, "ba.calculator", "1.0.1", sharedDepJson)
+        addPackageWithRawDeps(registryRootDir, "cw.logger", "1.0.0", sharedDepJson)
+        val delegate = LocalDirectoryRegistry(registryRootDir)
+        val prefixRegistry =
+            oepm.registry.PrefixRoutingRegistry(mapOf("ba." to delegate, "cw." to delegate))
+
+        val resolved =
+            DependencyResolver.resolveAll(
+                versionMap("ba.calculator" to "^1.0.0", "cw.logger" to "^1.0.0"),
+                prefixRegistry,
+                directSourceCacheDir(),
+            )
+
+        // Both parents' "greeter" dependency lands on the same bare key, so it's resolved once,
+        // not flagged as a namespace collision between two differently-keyed copies.
+        assertEquals(setOf("ba.calculator", "cw.logger", "greeter"), resolved.keys)
+    }
+
+    @Test
+    fun `conflicting direct-source specs at the same key fail loudly`() {
+        val remotesRoot = createTempDirectory("oepm-resolver-direct-test").toFile()
+        val greeterRepoA = directSourceRepo(remotesRoot, "greeter-repo-a", "greeter", "1.0.0")
+        val greeterRepoB = directSourceRepo(remotesRoot, "greeter-repo-b", "greeter", "1.0.0")
+
+        val calculatorRegistryRoot = registryRoot()
+        addPackageWithRawDeps(
+            calculatorRegistryRoot,
+            "example.a",
+            "1.0.0",
+            """"greeter": { "repoUrl": "${greeterRepoA.absolutePath.replace("\\", "\\\\")}", "ref": "v1.0.0" }""",
+        )
+        addPackageWithRawDeps(
+            calculatorRegistryRoot,
+            "example.b",
+            "1.0.0",
+            """"greeter": { "repoUrl": "${greeterRepoB.absolutePath.replace("\\", "\\\\")}", "ref": "v1.0.0" }""",
+        )
+        val registry = LocalDirectoryRegistry(calculatorRegistryRoot)
+
+        val error =
+            assertFailsWith<IllegalStateException> {
+                DependencyResolver.resolveAll(
+                    versionMap("example.a" to "^1.0.0", "example.b" to "^1.0.0"),
+                    registry,
+                    directSourceCacheDir(),
+                )
+            }
+        assertTrue(
+            error.message!!.contains("Conflicting direct-source dependency"),
+            "Expected a direct-source conflict error, got: ${error.message}",
+        )
+    }
+
+    @Test
+    fun `the same key resolved once as a registry dependency and once as direct-source fails loudly`() {
+        val remotesRoot = createTempDirectory("oepm-resolver-direct-test").toFile()
+        val greeterRepo = directSourceRepo(remotesRoot, "greeter-repo", "greeter", "1.0.0")
+
+        val root = registryRoot()
+        addPackageWithRawDeps(
+            root,
+            "example.a",
+            "1.0.0",
+            """"greeter": { "repoUrl": "${greeterRepo.absolutePath.replace("\\", "\\\\")}", "ref": "v1.0.0" }""",
+        )
+        addPackage(root, "greeter", "1.0.0")
+        val registry = LocalDirectoryRegistry(root)
+
+        val error =
+            assertFailsWith<IllegalStateException> {
+                DependencyResolver.resolveAll(
+                    mapOf(
+                        "example.a" to DependencySpec.Registry("^1.0.0"),
+                        "greeter" to DependencySpec.Registry("^1.0.0"),
+                    ),
+                    registry,
+                    directSourceCacheDir(),
+                )
+            }
+        assertTrue(
+            error.message!!.contains("Conflicting dependency kinds"),
+            "Expected a conflicting-kinds error, got: ${error.message}",
+        )
+    }
+
+    // --- PROPATH namespace collisions ---
+
+    @Test
+    fun `two resolved packages sharing the same real package_name fail loudly, even under different keys`() {
+        val remotesRoot = createTempDirectory("oepm-resolver-direct-test").toFile()
+        val kgRepo = directSourceRepo(remotesRoot, "calculator-kg-repo", "calculator", "1.0.0")
+        val lbsRepo = directSourceRepo(remotesRoot, "calculator-lbs-repo", "calculator", "1.0.0")
+
+        val error =
+            assertFailsWith<IllegalStateException> {
+                DependencyResolver.resolveAll(
+                    mapOf(
+                        "calculatorKg" to DependencySpec.DirectSource(kgRepo.absolutePath, "v1.0.0"),
+                        "calculatorLbs" to DependencySpec.DirectSource(lbsRepo.absolutePath, "v1.0.0"),
+                    ),
+                    PoisonRegistry,
+                    directSourceCacheDir(),
+                )
+            }
+        assertTrue(error.message!!.contains("PROPATH namespace collision"))
+        assertTrue(error.message!!.contains("calculatorKg"))
+        assertTrue(error.message!!.contains("calculatorLbs"))
+        assertTrue(error.message!!.contains("\"calculator\""))
+    }
+
+    @Test
+    fun `packages with different real package_names resolve fine together`() {
+        val remotesRoot = createTempDirectory("oepm-resolver-direct-test").toFile()
+        val calculatorRepo = directSourceRepo(remotesRoot, "calculator-repo", "calculator", "1.0.0")
+        val greeterRepo = directSourceRepo(remotesRoot, "greeter-repo", "greeter", "1.0.0")
+
+        val resolved =
+            DependencyResolver.resolveAll(
+                mapOf(
+                    "calculator" to DependencySpec.DirectSource(calculatorRepo.absolutePath, "v1.0.0"),
+                    "greeter" to DependencySpec.DirectSource(greeterRepo.absolutePath, "v1.0.0"),
+                ),
+                PoisonRegistry,
+                directSourceCacheDir(),
+            )
+
+        assertEquals(setOf("calculator", "greeter"), resolved.keys)
     }
 }
