@@ -9,23 +9,18 @@ package oepm.registry
  * fallback.
  */
 class PrefixRoutingRegistry(private val delegatesByPrefix: Map<String, Registry>) : Registry {
-    private fun route(packageName: String): Pair<String, Registry> =
+    private fun route(packageName: String): Registry =
         delegatesByPrefix.entries
             .filter { (prefix, _) -> packageName.startsWith(prefix) }
             .maxByOrNull { (prefix, _) -> prefix.length }
-            ?.toPair()
+            ?.value
             ?: throw IllegalStateException(
                 "No configured registry prefix matches \"$packageName\" " +
                     "(configured prefixes: ${delegatesByPrefix.keys.joinToString(", ")})",
             )
 
-    override fun resolve(packageName: String, versionSpec: String): ResolvedPackage {
-        val (prefix, delegate) = route(packageName)
-        return delegate.resolve(packageName, versionSpec).copy(resolvedPrefix = prefix)
-    }
+    override fun resolve(packageName: String, versionSpec: String): ResolvedPackage =
+        route(packageName).resolve(packageName, versionSpec)
 
-    override fun findAny(packageName: String): ResolvedPackage? {
-        val (prefix, delegate) = route(packageName)
-        return delegate.findAny(packageName)?.copy(resolvedPrefix = prefix)
-    }
+    override fun findAny(packageName: String): ResolvedPackage? = route(packageName).findAny(packageName)
 }

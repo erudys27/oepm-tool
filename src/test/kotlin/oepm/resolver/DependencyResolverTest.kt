@@ -186,7 +186,7 @@ class DependencyResolverTest {
     }
 
     @Test
-    fun `a transitive direct-source dependency inherits its parent's resolved prefix`() {
+    fun `a transitive direct-source dependency keeps its own bare declared name, no inherited prefix`() {
         val remotesRoot = createTempDirectory("oepm-resolver-direct-test").toFile()
         val greeterRepo = directSourceRepo(remotesRoot, "greeter-repo", "greeter", "1.0.1")
 
@@ -209,8 +209,34 @@ class DependencyResolverTest {
                 directSourceCacheDir(),
             )
 
-        assertEquals(setOf("ba.calculator", "ba.greeter"), resolved.keys)
-        assertEquals("1.0.1", resolved.getValue("ba.greeter").version)
+        assertEquals(setOf("ba.calculator", "greeter"), resolved.keys)
+        assertEquals("1.0.1", resolved.getValue("greeter").version)
+    }
+
+    @Test
+    fun `the same direct-source dependency declared by two differently-routed parents is deduped, not a collision`() {
+        val remotesRoot = createTempDirectory("oepm-resolver-direct-test").toFile()
+        val greeterRepo = directSourceRepo(remotesRoot, "greeter-repo", "greeter", "1.0.1")
+        val sharedDepJson =
+            """"greeter": { "repoUrl": "${greeterRepo.absolutePath.replace("\\", "\\\\")}", "ref": "v1.0.1" }"""
+
+        val registryRootDir = registryRoot()
+        addPackageWithRawDeps(registryRootDir, "ba.calculator", "1.0.1", sharedDepJson)
+        addPackageWithRawDeps(registryRootDir, "cw.logger", "1.0.0", sharedDepJson)
+        val delegate = LocalDirectoryRegistry(registryRootDir)
+        val prefixRegistry =
+            oepm.registry.PrefixRoutingRegistry(mapOf("ba." to delegate, "cw." to delegate))
+
+        val resolved =
+            DependencyResolver.resolveAll(
+                versionMap("ba.calculator" to "^1.0.0", "cw.logger" to "^1.0.0"),
+                prefixRegistry,
+                directSourceCacheDir(),
+            )
+
+        // Both parents' "greeter" dependency lands on the same bare key, so it's resolved once,
+        // not flagged as a namespace collision between two differently-keyed copies.
+        assertEquals(setOf("ba.calculator", "cw.logger", "greeter"), resolved.keys)
     }
 
     @Test

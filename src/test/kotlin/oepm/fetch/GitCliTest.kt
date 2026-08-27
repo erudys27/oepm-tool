@@ -6,11 +6,6 @@ import kotlin.test.assertTrue
 
 class GitCliTest {
     @Test
-    fun `checkAvailable succeeds when git is on PATH`() {
-        GitCli.checkAvailable()
-    }
-
-    @Test
     fun `run returns stdout on success`() {
         val output = GitCli.run(null, "--version")
 

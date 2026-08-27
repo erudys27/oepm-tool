@@ -4,9 +4,11 @@ import oepm.manifest.Manifest
 
 /**
  * Shared "find the one candidate whose manifest declares this package_name,
- * fail loudly on more than one" logic used by every Registry implementation
+ * fail loudly on more than one" logic used by a Registry implementation
  * that scans a set of candidates rather than looking one up directly by
- * name (e.g. LocalDirectoryRegistry's folders, GitRegistry's tree entries).
+ * name (e.g. LocalDirectoryRegistry's folders). CatalogRegistry doesn't
+ * use this - it looks a package up directly by catalog path, so there's
+ * never a set of candidates to disambiguate.
  */
 object PackageMatcher {
     fun <T> selectUnique(

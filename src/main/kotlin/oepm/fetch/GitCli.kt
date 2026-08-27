@@ -35,9 +35,4 @@ object GitCli {
 
         return stdout
     }
-
-    /** Fails loudly if git isn't on PATH at all. */
-    fun checkAvailable() {
-        run(workingDir = null, "--version")
-    }
 }

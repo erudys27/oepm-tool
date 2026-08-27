@@ -19,13 +19,22 @@ import java.io.File
  *   normally), exactly as before. The declared name must already be
  *   fully-qualified (e.g. "ba.greeter").
  * - DirectSource: fetched directly by repoUrl/ref (GitPackageFetcher), no
- *   registry lookup at all. When it's a *transitive* dependency (declared
- *   inside another package's own manifest), its key in the resolved graph
- *   inherits the enclosing package's own resolvedPrefix — a direct-source
- *   "greeter" declared by a "ba."-routed package becomes "ba.greeter"
- *   here, without ever being routed. A root-level direct-source
- *   dependency has no parent to inherit a prefix from, so it keeps its
- *   bare declared name.
+ *   registry lookup at all. Always keyed by its own bare declared name -
+ *   no inherited prefix, root-level or transitive. This is deliberate:
+ *   two packages resolved via *different* registries that both declare a
+ *   direct-source dependency on the exact same repoUrl/ref (a shared
+ *   utility package) end up requesting the *same* key, so the reuse/
+ *   conflict logic below (an exact repoUrl/ref match on an already-
+ *   resolved key is fine, a mismatch is a named conflict) naturally
+ *   dedupes them instead of every parent minting its own copy under a
+ *   different prefixed key. Inheriting a prefix here was tried and
+ *   dropped (2026-08-26) - it made that shared-dependency case trip
+ *   checkNoNamespaceCollision below as a false positive (same real
+ *   package_name, different keys), even though nothing was actually
+ *   wrong. Two direct-source deps that really are different things just
+ *   happening to share a bare name are still caught correctly - by the
+ *   repoUrl/ref mismatch check, which is more precise than a
+ *   namespace-based check would be.
  *
  * v1 rules (see docs/spec/lockfile-format.md): exactly one resolution per
  * key across the whole graph — a second, incompatible requirement for an
@@ -38,12 +47,11 @@ import java.io.File
  *
  * A resolved package's *own* declared package_name (its real OO ABL
  * namespace - see oepm.manifest.Manifest) is independent of the key it was
- * resolved under (see DependencySpec.DirectSource's prefix-inheritance
- * above), so two different keys can end up resolving to packages sharing
- * the same real namespace (e.g. two independently-fetched "calculator"
- * packages, routed/declared under different keys). PROPATH is a single
- * flat, ordered list with no ambiguity detection of its own - whichever
- * one lands first on PROPATH silently shadows the other, with no compile
+ * resolved under, so two different keys can still end up resolving to
+ * packages sharing the same real namespace (e.g. two independently
+ * registry-routed "calculator" packages under different prefixes). PROPATH
+ * is a single flat, ordered list with no ambiguity detection of its own -
+ * whichever one lands first silently shadows the other, with no compile
  * error. checkNoNamespaceCollision below catches this at resolve time
  * instead, once the whole graph is known, so it's a loud, named failure
  * rather than a silently-wrong PROPATH.
@@ -101,13 +109,8 @@ object DependencyResolver {
             val ownManifest = ManifestReader.read(ownManifestFile)
             namespaceByKey[packageKey] = ownManifest.packageName
             for ((depName, depSpec) in ownManifest.dependencies) {
-                val childKey =
-                    when (depSpec) {
-                        is DependencySpec.Registry -> depName
-                        is DependencySpec.DirectSource -> (resolvedPackage.resolvedPrefix ?: "") + depName
-                    }
                 resolveOne(
-                    childKey,
+                    depName,
                     depSpec,
                     path + packageKey,
                     resolved,

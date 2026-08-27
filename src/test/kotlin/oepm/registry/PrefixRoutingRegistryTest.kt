@@ -50,19 +50,4 @@ class PrefixRoutingRegistryTest {
 
         assertNull(registry.findAny("ba.missing.package"))
     }
-
-    @Test
-    fun `resolve stamps the matched prefix onto the returned package`() {
-        val registry = PrefixRoutingRegistry(mapOf("ba." to FakeRegistry("ba"), "cw." to FakeRegistry("cw")))
-
-        assertEquals("ba.", registry.resolve("ba.calculator", "^1.0.0").resolvedPrefix)
-        assertEquals("cw.", registry.resolve("cw.calculator", "^1.0.0").resolvedPrefix)
-    }
-
-    @Test
-    fun `findAny stamps the matched prefix onto the returned package`() {
-        val registry = PrefixRoutingRegistry(mapOf("ba." to FakeRegistry("ba")))
-
-        assertEquals("ba.", registry.findAny("ba.calculator")?.resolvedPrefix)
-    }
 }
