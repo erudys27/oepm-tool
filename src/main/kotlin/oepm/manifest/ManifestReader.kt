@@ -31,7 +31,7 @@ object ManifestReader {
 
         val dependencies =
             json.optJSONObject("dependencies")?.let { deps ->
-                deps.keySet().associateWith { deps.getString(it) }
+                deps.keySet().associateWith { key -> parseDependencySpec(key, deps.get(key), file) }
             } ?: emptyMap()
 
         return Manifest(
@@ -42,6 +42,32 @@ object ManifestReader {
             sourceRoots = sourceRoots,
         )
     }
+
+    /**
+     * A dependencies-map entry is either a plain caret-range string
+     * (DependencySpec.Registry, today's shape) or a {repoUrl, ref} object
+     * (DependencySpec.DirectSource) - see Manifest.kt.
+     */
+    private fun parseDependencySpec(key: String, value: Any, file: File): DependencySpec =
+        when (value) {
+            is String -> DependencySpec.Registry(value)
+            is JSONObject ->
+                DependencySpec.DirectSource(
+                    repoUrl =
+                        value.optString("repoUrl").takeIf { it.isNotBlank() }
+                            ?: throw IllegalArgumentException(
+                                "Dependency \"$key\" in ${file.path} is missing \"repoUrl\"",
+                            ),
+                    ref =
+                        value.optString("ref").takeIf { it.isNotBlank() }
+                            ?: throw IllegalArgumentException("Dependency \"$key\" in ${file.path} is missing \"ref\""),
+                )
+            else ->
+                throw IllegalArgumentException(
+                    "Dependency \"$key\" in ${file.path} has an unrecognized shape - expected a version-range " +
+                        "string or a {repoUrl, ref} object",
+                )
+        }
 
     /**
      * Autofill, not validation: only runs when package_name is absent

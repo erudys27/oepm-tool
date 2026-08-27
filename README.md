@@ -14,17 +14,56 @@ this natively. See `docs/research/` for the comparative analysis (npm, pip,
 CPAN-era package managers, Maven/Ivy, and the existing OpenEdge tooling
 ecosystem) that this design is based on.
 
+This repo used to be the whole `oepm` monorepo (plugin + demo app +
+registry content together). It's since been split — this repo is just the
+plugin itself now. The demo/consumer app lives at
+[github.com/erudys27/openedge-package-manager](https://github.com/erudys27/openedge-package-manager),
+and packages/registries are their own separate repos (see "Remote
+registries" below).
+
 ## Status
 
-The core loop works end to end: declare a dependency (or let `oepm` do it
-for you), resolve it — transitively, including a resolved package's own
-declared dependencies, with a version-conflict check across the whole
-graph — against the local-directory registry, copy sources in, wire them
-into PROPATH. See `docs/decisions/` for what's been decided and why, and
-the open questions at the bottom of this file for what hasn't. Still
-missing: real Gradle/Ivy-based resolution (a hand-written version matcher
-is used instead, see the note under "Getting started"), integrity
-hashing, multi-version registry support, and include-collision linting.
+The core loop works end to end, resolving from real, remote, git-hosted
+registries — not just a local folder:
+
+- **Multi-registry, prefix-routed resolution**: any number of independent
+  registries can be configured, each with its own routing prefix (e.g.
+  `ba.` → one registry, `cw.` → another). A dependency's prefix picks
+  which registry it's fetched from (`oepm/registry/PrefixRoutingRegistry`).
+- **Catalog-based registries**: a registry is a small git "catalog" repo
+  holding no package content of its own — just one reference file per
+  package version (`packages/<name>/<version>.json`) pointing at that
+  package's own dedicated repo + tag. Fetching is a plain shallow git
+  clone, no partial-clone machinery (`oepm/registry/CatalogRegistry`).
+- **Direct-source dependencies**: a package's own manifest can depend on
+  another package by inline `{repoUrl, ref}` instead of a registry lookup
+  — no catalog entry needed for it at all. Always keyed by its own bare
+  declared name (no inherited prefix — see `docs/spec/manifest-schema.md`
+  for why that was tried and dropped).
+- **Transitive resolution**: a resolved package's own declared
+  dependencies are resolved too, recursively, with a version-conflict
+  check across the whole graph (`oepm/resolver/DependencyResolver`).
+- **Integrity verification**: `oepm.lock` records a real content hash per
+  package (`oepm/integrity/DirectoryHash`); reinstalling an
+  already-locked version whose registry content has since changed (e.g. a
+  git tag force-moved to different content) fails loudly instead of
+  silently accepting it (`oepm/lock/IntegrityChecker`).
+- **PROPATH namespace-collision detection**: two resolved packages sharing
+  the same real OO ABL namespace (`package_name`), even under different
+  resolution keys, fail loudly at resolve time instead of silently
+  shadowing each other on PROPATH.
+- Backward compatible: a project with no `registries {}` configured still
+  resolves against a plain local-directory registry
+  (`oepm/registry/LocalDirectoryRegistry`), the original v1 behavior.
+
+See `docs/decisions/` for what's been decided and why, and the open
+questions at the bottom of this file for what hasn't. Still missing: real
+Gradle/Ivy-based resolution (a hand-written version matcher is used
+instead, see "Known deviation from ADR-0001" below), multi-version
+registry support (the catalog layout is prepped for it, but there's no
+version-selection logic yet), include-collision linting, and an
+`npm prune`-equivalent (an entry that stops being part of the resolved
+graph is never automatically removed from `oepm_packages/`/`buildPath`).
 
 ## Repo layout
 
@@ -33,36 +72,30 @@ docs/
   decisions/     ADRs — one file per decision, numbered, with status
   spec/          the actual manifest/lockfile/PROPATH specification
   research/      background analysis that informed the decisions
-demo/packages/
-  calculator-package/  sample OO ABL package (a dependency) — plain ABL, no Gradle files, lives in the registry;
-                        itself declares a dependency on greeter-package (see its openedge-project.json), to
-                        exercise transitive resolution
-  greeter-package/     another sample OO ABL package (a dependency) — same as above
-  calculator-one-package/, calculator-two-package/  both depend on greeter-package, with
-                        incompatible version ranges (^1.0.0 vs ^2.0.0)
-  double-calculator-package/  depends on both of the above — installing it is what actually
-                        triggers the version-conflict failure (see demo/packages/README.md)
-demo/exploration/
-  consumer-app/         sample OO ABL app illustrating PROPATH/include collisions (see its WALKTHROUGH.md) —
-                        declares only calculator-package directly; greeter-package is resolved transitively.
-                        Applies the oepm plugin for real (settings.gradle.kts/build.gradle.kts), so
-                        `oepm install`/`oepm propath` can be run against it directly
-demo/customer-app/     a more fleshed-out demo app (several classes, an invoice/greeting scenario) for
-                        showing oepm to someone else — see its own README
 src/main/kotlin/oepm/
   OepmPlugin.kt      Gradle plugin entrypoint — registers oepmInstall/oepmPropath tasks,
-                     supports -PoepmAdd=<package_name>[:<versionSpec>] to add + resolve in one step
+                     the registries{}/registryRoot/cacheDir DSL, supports
+                     -PoepmAdd=<package_name>[:<versionSpec>] to add + resolve in one step
   manifest/          reads/writes oepm's manifest fields in openedge-project.json
-                     (ManifestReader, BuildPathUpdater, DependenciesUpdater)
+                     (ManifestReader, BuildPathUpdater, DependenciesUpdater), the
+                     DependencySpec union type (registry-routed vs. direct-source)
+  registry/          Registry implementations: LocalDirectoryRegistry (local folder,
+                     original v1), CatalogRegistry (remote git catalog),
+                     PrefixRoutingRegistry (routes by configured prefix), PackageMatcher
+                     (shared candidate-matching logic)
+  fetch/             git plumbing: GitCli (process wrapper), GitPackageFetcher (shallow
+                     clone + manifest read, shared by CatalogRegistry and direct-source deps)
+  lock/              oepm.lock reading + integrity verification against it
+  integrity/         content hashing for oepm.lock's integrity field
   propath/           turns a project's buildPath into an ordered, absolute PROPATH
-  registry/          local-directory registry: finds a package by package_name, matches version ranges
-  resolver/          resolves a dependency graph transitively (a resolved package's own
-                     dependencies are resolved too), with a version-conflict check per package name
+  resolver/          resolves a dependency graph transitively, with version-conflict
+                     and PROPATH-namespace-collision checks across the whole graph
   version/           SemVer + npm-style caret range matching
 src/test/kotlin/oepm/           unit tests, mirrors src/main/kotlin/oepm layout
 src/functionalTest/kotlin/oepm/ Gradle TestKit tests — apply the real plugin to a
                                  throwaway project and run its tasks for real, using
-                                 copies of demo/packages/ as fixtures
+                                 this repo's own small fixture packages
+                                 (src/functionalTest/resources/fixtures/)
 oepm / oepm.bat        thin CLI wrapper — translates `oepm install <package>` /
                         `oepm propath` into the equivalent ./gradlew calls
 build.gradle.kts       plugin build config (Kotlin, Java 17 toolchain)
@@ -79,10 +112,13 @@ The Gradle wrapper (`gradlew`/`gradlew.bat`) is checked in.
 - Database dependencies are entirely out of scope for v1 — not merely
   unmanaged (see [ADR-0003](docs/decisions/0003-db-deps-declared-not-managed.md),
   rejected).
-- Registry: local filesystem directory only. No HTTP registry, no auth.
+- Registry: a local filesystem directory, or a remote git catalog repo
+  (see "Status" above) — no HTTP registry, no auth.
 - Publishing: minimal — `maven-publish` to a plain git-repo-hosted Maven
   repository (no hosted registry service, no auth) — see
-  [ADR-0008](docs/decisions/0008-plugin-publishing-v1.md).
+  [ADR-0008](docs/decisions/0008-plugin-publishing-v1.md). Registry/catalog
+  publishing is still entirely manual (write the reference file/tag by
+  hand) — no publish tooling yet.
 - Implementation language: Kotlin, as a Gradle plugin reusing Gradle's
   dependency-resolution engine (see ADR-0001).
 - Manifest: no separate `oepm.json` — oepm-owned keys (`package_name`,
@@ -109,15 +145,14 @@ Two ways to consume the plugin — pick based on whether you're developing
    Open a new terminal afterward — PATH changes don't apply to already-open
    sessions. This is per-user, per-machine; it isn't part of the repo and
    doesn't travel with `git clone`.
-3. **Every consumer project's `settings.gradle.kts`** needs
+3. **The consumer project's `settings.gradle.kts`** needs
    `pluginManagement { includeBuild("<path-to-your-clone-of-this-repo>") }`
    pointing at wherever *that person* cloned this repo — see
-   `demo/customer-app/settings.gradle.kts` for the pattern. In this repo's
-   demo projects, that path is a `gradle.properties` value
-   (`oepmToolPath`), not hardcoded — override it per-clone instead of
+   [openedge-package-manager](https://github.com/erudys27/openedge-package-manager)'s
+   `settings.gradle.kts` for the pattern. That path is a `gradle.properties`
+   value (`oepmToolPath`), not hardcoded — override it per-clone instead of
    editing `settings.gradle.kts`. This only works within a team sharing
-   consistent clone locations (or a monorepo); it isn't viable for an
-   arbitrary external user.
+   consistent clone locations; it isn't viable for an arbitrary external user.
 
 **Option B — published coordinate (for actually using `oepm`, once it's
 been published somewhere — see [ADR-0008](docs/decisions/0008-plugin-publishing-v1.md)):**
@@ -135,45 +170,46 @@ plugins {
 ```
 
 No path plumbing, no PATH setup needed for this part — just the URL of
-wherever the plugin got published (see
-[MULTI-REPO-SETUP-PLAN.md](MULTI-REPO-SETUP-PLAN.md) for the actual
-hosting plan). `./gradlew publish` publishes the current version to a
-local, disposable folder by default (`-PoepmPublishRepoUrl=...` to target
-somewhere real).
+wherever the plugin got published. `./gradlew publish` publishes the
+current version to a local, disposable folder by default
+(`-PoepmPublishRepoUrl=...` to target somewhere real).
+
+## Remote registries
+
+Configure any number of registries in the consumer's `build.gradle.kts`:
+
+```kotlin
+oepm {
+    registries {
+        create("ba") {
+            prefix.set("ba.")
+            catalogUrl.set("https://github.com/erudys27/registry-ba.git")
+        }
+    }
+}
+```
+
+A dependency `"ba.calculator": "^1.0.0"` routes to whichever registry's
+prefix it starts with. The registry itself holds no package content —
+just a reference file (`packages/calculator/1.0.0.json`) pointing at the
+package's own dedicated repo + tag; `oepmInstall` shallow-clones that repo
+into a tool-managed cache (`~/.oepm/cache` by default, override with
+`-PoepmCacheDir=...`), same convention as `~/.m2`/`~/.npm` — nothing to
+set up by hand. See
+[github.com/erudys27/openedge-package-manager](https://github.com/erudys27/openedge-package-manager)
+for a real, working example (two registries, a transitive dependency, and
+a direct-source dependency, all live).
+
+If `registries {}` is left empty, `oepmInstall` falls back to the original
+`LocalDirectoryRegistry` behavior via `registryRoot` — a plain local
+folder, one subfolder per package.
 
 ## Getting started
 
-From inside `demo/customer-app` (with the repo root on `PATH`, per step 2
-above — use `.bat` explicitly in PowerShell):
+See [openedge-package-manager](https://github.com/erudys27/openedge-package-manager)'s
+own README for a real, working consumer app and its `DEMO-PREP.md`/walkthrough.
 
-```
-oepm.bat install    # resolves example.calculator, and transitively, example.greeter
-oepm.bat propath    # print the generated PROPATH
-```
-
-Without the `PATH` step, use the relative path instead:
-`../../oepm install` (bash) or `..\..\oepm.bat install` (PowerShell).
-
-Or directly via Gradle, from the repo root:
-
-```
-./gradlew -p demo/customer-app oepmInstall
-./gradlew -p demo/customer-app oepmPropath
-```
-
-`customer-app`'s `settings.gradle.kts` pulls the plugin in via
-`includeBuild` by default (Option A above) — the actual path comes from
-`gradle.properties`' `oepmToolPath`, not a hardcoded literal, so pointing
-this at a separately-cloned tool repo is a one-line properties edit. Its
-`registryRoot` is the same story via `oepmRegistryRoot`, currently
-pointing at `demo/packages/`, where every demo package
-(`calculator-package`, `greeter-package`, and friends) lives, so any of
-them can be installed by its `package_name`. See
-`demo/customer-app/README.md` for what this project actually does, and
-`demo/exploration/consumer-app` for the plugin's original, more minimal
-end-to-end fixture (also used by `./gradlew functionalTest` below).
-
-To verify the plugin in isolation instead (no dependency on demo state):
+To verify the plugin in isolation instead (no dependency on any other repo):
 
 ```
 ./gradlew functionalTest
@@ -195,12 +231,11 @@ was reusing Gradle/Ivy's own resolver rather than writing one.
 
 - Whether `oepm propath` should also emit a `.pf` parameter file, since
   that's what devs actually pass to `_progres`/`prowin`.
-- `package_name` uniqueness is enforced within one registry directory
-  (`LocalDirectoryRegistry` fails loudly on a collision), but not across
-  separate registries — see [manifest-schema.md](docs/spec/manifest-schema.md).
-- Whether oepm should warn/fail when a generated PROPATH would shadow an
-  entry already present in `openedge-project.json`'s `buildPath` — see
-  [propath-generation.md](docs/spec/propath-generation.md).
+- `package_name` uniqueness is enforced within one `LocalDirectoryRegistry`
+  directory, and across the whole resolved graph regardless of registry
+  (the PROPATH namespace-collision check) — but not proactively at
+  publish time, only when two colliding packages actually get resolved
+  together.
 - `oepm.lock`'s `source` field is currently written as an absolute
   filesystem path (not portable across machines/checkouts) — needs a
   relative or `local:///`-style scheme instead, per
@@ -208,3 +243,7 @@ was reusing Gradle/Ivy's own resolver rather than writing one.
 - Circular-dependency and version-conflict errors from `oepm/resolver/`
   are raw exception messages surfaced through Gradle's build failure
   output — no dedicated, friendlier error reporting yet.
+- No cache concurrency/locking for multiple builds sharing one cache dir
+  (e.g. CI).
+- Catalog/registry authoring is entirely manual — no publish tooling to
+  generate reference files or bump versions.

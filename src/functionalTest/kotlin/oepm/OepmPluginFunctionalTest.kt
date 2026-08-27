@@ -12,8 +12,9 @@ import kotlin.test.assertTrue
 /**
  * Runs the real plugin, via TestKit, against a throwaway copy of this
  * repo's own small fixture packages (src/functionalTest/resources/fixtures/) —
- * self-contained, not dependent on demo/ existing, since the demo/registry
- * content lives in separate repos (see MULTI-REPO-SETUP-PLAN.md).
+ * self-contained, not dependent on any other repo existing (the demo app
+ * and registry content now live in separate repos, e.g.
+ * github.com/erudys27/openedge-package-manager).
  */
 class OepmPluginFunctionalTest {
     /**
