@@ -255,4 +255,158 @@ class OepmPluginFunctionalTest {
             "Expected no oepm.lock to be written after a failed install",
         )
     }
+
+    // --- registries{} DSL + oepm-registries.properties merging ---
+
+    /**
+     * A project with one registry from the registries{} DSL and one from
+     * oepm-registries.properties - neither URL needs to be real: this
+     * only exercises PrefixRoutingRegistry's own routing/merge logic
+     * (surfaced via its "no configured prefix matches" error listing both
+     * prefixes), never an actual fetch.
+     */
+    private fun buildMergedRegistriesProject(): File {
+        val projectDir = createTempDirectory("oepm-functional-test-merge").toFile()
+
+        projectDir.resolve("settings.gradle.kts").writeText("""rootProject.name = "merge-fixture"""")
+        projectDir.resolve("build.gradle.kts").writeText(
+            """
+            plugins {
+                id("io.github.erudys27.oepm")
+            }
+
+            oepm {
+                registries {
+                    create("x") {
+                        prefix.set("x.")
+                        catalogUrl.set("https://example.invalid/x.git")
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+        projectDir.resolve("oepm-registries.properties").writeText(
+            """
+            y.prefix=y.
+            y.catalogUrl=https://example.invalid/y.git
+            """.trimIndent(),
+        )
+        projectDir.resolve("openedge-project.json").writeText(
+            JSONObject()
+                .put("name", "merge-fixture")
+                .put("version", "1.0.0")
+                .put("package_name", "example.merge")
+                .put("dependencies", JSONObject().put("z.something", "^1.0.0"))
+                .put("buildPath", JSONArray().put(JSONObject().put("type", "source").put("path", "src")))
+                .toString(2),
+        )
+        return projectDir
+    }
+
+    @Test
+    fun `registries from the DSL and oepm-registries properties are both applied`() {
+        val projectDir = buildMergedRegistriesProject()
+
+        val result =
+            GradleRunner.create()
+                .withProjectDir(projectDir)
+                .withPluginClasspath()
+                .withArguments("oepmInstall")
+                .buildAndFail()
+
+        assertTrue(
+            result.output.contains("x.") && result.output.contains("y."),
+            "Expected both the DSL registry (x.) and the properties-file registry (y.) to be " +
+                "configured, got:\n${result.output}",
+        )
+    }
+
+    @Test
+    fun `a prefix declared in both the DSL and oepm-registries properties fails loudly`() {
+        val projectDir = buildMergedRegistriesProject()
+        // Redeclare the DSL's "x." prefix under a different name in the properties file too.
+        projectDir.resolve("oepm-registries.properties").appendText(
+            "\nconflict.prefix=x.\nconflict.catalogUrl=https://example.invalid/conflict.git\n",
+        )
+
+        val result =
+            GradleRunner.create()
+                .withProjectDir(projectDir)
+                .withPluginClasspath()
+                .withArguments("oepmInstall")
+                .buildAndFail()
+
+        assertTrue(
+            result.output.contains("Duplicate registry prefix"),
+            "Expected a duplicate-prefix failure, got:\n${result.output}",
+        )
+    }
+
+    // --- projectRoot != Gradle's own project directory ---
+
+    @Test
+    fun `projectRoot lets the ABL project live one level up from Gradle's own files`() {
+        val registryDir = buildRegistry()
+        val registryPath = registryDir.absolutePath.replace("\\", "/")
+
+        // Gradle's own files (settings.gradle.kts/build.gradle.kts) live in
+        // a subfolder; openedge-project.json/src/etc. live at abRoot, one
+        // level up - the ".oepm/" layout scaffoldProject can generate.
+        val abRoot = createTempDirectory("oepm-functional-test-projectroot").toFile()
+        val gradleFilesDir = File(abRoot, ".oepm").apply { mkdirs() }
+
+        gradleFilesDir.resolve("settings.gradle.kts").writeText("""rootProject.name = "projectroot-fixture"""")
+        gradleFilesDir.resolve("build.gradle.kts").writeText(
+            """
+            plugins {
+                id("io.github.erudys27.oepm")
+            }
+
+            oepm {
+                projectRoot.set(file(".."))
+                registryRoot.set(file("$registryPath"))
+            }
+            """.trimIndent(),
+        )
+        abRoot.resolve("openedge-project.json").writeText(
+            JSONObject()
+                .put("name", "projectroot-fixture")
+                .put("version", "1.0.0")
+                .put("package_name", "example.consumer")
+                .put("dependencies", JSONObject().put("example.calculator", "^1.0.0"))
+                .put("buildPath", JSONArray().put(JSONObject().put("type", "source").put("path", "src")))
+                .toString(2),
+        )
+
+        val installResult =
+            GradleRunner.create()
+                .withProjectDir(gradleFilesDir)
+                .withPluginClasspath()
+                .withArguments("oepmInstall")
+                .build()
+
+        assertTrue(
+            installResult.output.contains("resolved 2 dependencies"),
+            "Expected both the direct and transitive dependency resolved, got:\n${installResult.output}",
+        )
+        assertTrue(
+            File(abRoot, "oepm_packages/example.calculator/src/example/calculator/Calculator.cls").exists(),
+            "Expected oepm_packages to be written at the ABL project root (abRoot), not inside .oepm/",
+        )
+        assertTrue(!File(gradleFilesDir, "oepm_packages").exists(), "Expected no oepm_packages inside .oepm/")
+        assertTrue(File(abRoot, "oepm.lock").exists(), "Expected oepm.lock at abRoot")
+        assertTrue(!File(gradleFilesDir, "oepm.lock").exists(), "Expected no oepm.lock inside .oepm/")
+
+        val propathResult =
+            GradleRunner.create()
+                .withProjectDir(gradleFilesDir)
+                .withPluginClasspath()
+                .withArguments("oepmPropath")
+                .build()
+        val expectedSrcEntry = File(abRoot, "src").absolutePath
+        assertTrue(
+            propathResult.output.contains(expectedSrcEntry),
+            "Expected oepmPropath to resolve buildPath entries against abRoot, got:\n${propathResult.output}",
+        )
+    }
 }

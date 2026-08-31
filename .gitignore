@@ -17,6 +17,11 @@ build/
 .kotlin/
 !gradle/wrapper/gradle-wrapper.jar
 
+# ./gradlew publish output when -PoepmPublishRepoUrl targets a local folder
+# outside build/ (e.g. a git-hosted-Maven-repo experiment) - disposable,
+# never meant to be committed.
+maven-repo/
+
 # IDE
 .idea/
 *.iml

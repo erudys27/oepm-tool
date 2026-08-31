@@ -1,3 +1,22 @@
+// Explicit imports, not fully-qualified inline references: "java" as a
+// bare identifier in this script resolves to java-gradle-plugin's own
+// java {} extension accessor, not the java.* package - shadows
+// java.util.Properties unless imported properly.
+import java.util.Properties
+
+// Lets the scaffoldProject task below use org.json.JSONObject directly in
+// its own script body - dependencies{} further down only puts it on this
+// project's compiled *output* classpath (what src/main/kotlin compiles
+// against), not on the build script's own classpath.
+buildscript {
+    repositories {
+        mavenCentral()
+    }
+    dependencies {
+        classpath("org.json:json:20250517")
+    }
+}
+
 plugins {
     `java-gradle-plugin`
     `maven-publish`
@@ -15,8 +34,8 @@ version = "0.1.0-SNAPSHOT"
 //
 // Where oepmPublishRepoUrl actually points is deliberately not decided
 // here - default is a local, disposable folder so `./gradlew publish`
-// works out of the box for testing. See MULTI-REPO-SETUP-PLAN.md for the
-// real target (a git-repo-hosted Maven repo).
+// works out of the box for testing. Real target: a git-repo-hosted Maven
+// repo (see ADR-0008), once actually set up.
 publishing {
     repositories {
         maven {
@@ -87,4 +106,254 @@ val functionalTestTask =
 
 tasks.check {
     dependsOn(functionalTestTask)
+}
+
+// Adds oepm wiring to -PtargetDir, which may already be a real, existing
+// OE project (not just an empty new one) - deliberately non-destructive:
+// files that don't yet exist are generated, files that already exist are
+// either left untouched (Gradle config - safely patching an arbitrary
+// existing build.gradle.kts isn't attempted) or patched to add only the
+// missing oepm-specific fields (openedge-project.json, since that's
+// tractable - it's just JSON). Static tool files (Gradle wrapper,
+// oepm/oepm.bat) are always refreshed to match this clone's version.
+//
+// Deliberately a plain task in *this* build, not something OepmPlugin
+// registers on a consumer - a not-yet-wired project has no Gradle build
+// of its own to run a task against yet, so this has to be invoked against
+// oepm-tool's own (already-existing) build instead. See oepm-init/
+// oepm-init.bat for the interactive wrapper meant for actual use;
+// direct usage:
+//   ./gradlew scaffoldProject -PtargetDir=. [-ProotProjectName=...] [-PpackageName=...] \
+//       [-Pregistries=<prefix1>=<url1>[,<prefix2>=<url2>,...]]
+tasks.register("scaffoldProject") {
+    group = "oepm"
+    description = "Adds oepm wiring to -PtargetDir (new or existing project). " +
+        "Usage: ./gradlew scaffoldProject -PtargetDir=<path> [-ProotProjectName=<name>] " +
+        "[-PpackageName=<name>] [-Pregistries=<prefix1>=<url1>[,<prefix2>=<url2>,...]]"
+
+    doLast {
+        val targetDirProp =
+            project.findProperty("targetDir") as String?
+                ?: throw GradleException(
+                    "Missing -PtargetDir=<path>. Usage: ./gradlew scaffoldProject -PtargetDir=<path> " +
+                        "[-ProotProjectName=<name>] [-PpackageName=<name>] " +
+                        "[-Pregistries=<prefix1>=<url1>[,<prefix2>=<url2>,...]]",
+                )
+        val targetDir = File(targetDirProp).absoluteFile
+        targetDir.mkdirs()
+
+        val explicitPackageName = project.findProperty("packageName") as String?
+        val rootProjectName = project.findProperty("rootProjectName") as String? ?: targetDir.name
+
+        val registries: List<Pair<String, String>> =
+            (project.findProperty("registries") as String?)
+                ?.split(",")
+                ?.filter { it.isNotBlank() }
+                ?.map { entry ->
+                    val separatorIndex = entry.indexOf('=')
+                    require(separatorIndex > 0) { "Malformed -Pregistries entry (expected prefix=url): \"$entry\"" }
+                    entry.substring(0, separatorIndex) to entry.substring(separatorIndex + 1)
+                }
+                ?: emptyList()
+
+        // Gradle's own build wiring (wrapper, settings/build/gradle.properties)
+        // goes into a .oepm/ subfolder for a genuinely fresh project, so the
+        // project root only shows genuinely project-relevant files
+        // (openedge-project.json, oepm-registries.properties, oepm/oepm.bat,
+        // src/, oepm.lock, oepm_packages/ once resolved). An already-legacy
+        // project (root-level Gradle files already present - including the
+        // real openedge-package-manager demo repo, which predates this) is
+        // left exactly as-is: re-running this against it keeps writing to
+        // the root, never creates a second, conflicting .oepm/ copy.
+        val legacyLayout =
+            File(targetDir, "settings.gradle.kts").exists() ||
+                File(targetDir, "build.gradle.kts").exists() ||
+                File(targetDir, "gradle.properties").exists()
+        val gradleFilesDir = if (legacyLayout) targetDir else File(targetDir, ".oepm").apply { mkdirs() }
+
+        // Static files always refreshed to this clone's version - nothing
+        // project-specific to preserve in them. oepm/oepm.bat always stay
+        // at targetDir root regardless of layout - they're what a user
+        // actually types, hiding them away would only add friction. They
+        // auto-detect .oepm/ vs a root-level gradlew themselves.
+        rootDir.resolve("gradlew").copyTo(File(gradleFilesDir, "gradlew"), overwrite = true)
+        File(gradleFilesDir, "gradlew").setExecutable(true)
+        rootDir.resolve("gradlew.bat").copyTo(File(gradleFilesDir, "gradlew.bat"), overwrite = true)
+        rootDir.resolve("gradle").copyRecursively(File(gradleFilesDir, "gradle"), overwrite = true)
+        rootDir.resolve("oepm").copyTo(File(targetDir, "oepm"), overwrite = true)
+        File(targetDir, "oepm").setExecutable(true)
+        rootDir.resolve("oepm.bat").copyTo(File(targetDir, "oepm.bat"), overwrite = true)
+
+        // Real relative path from gradleFilesDir back to this oepm-tool
+        // clone - computed from where the two actually are, not a guessed
+        // default.
+        val oepmToolPath =
+            gradleFilesDir.toPath().relativize(rootDir.toPath()).toString().replace('\\', '/')
+
+        fun renderTemplate(templateName: String, replacements: Map<String, String>): String {
+            var text = rootDir.resolve("scaffold/templates/$templateName").readText()
+            replacements.forEach { (token, value) -> text = text.replace("{{$token}}", value) }
+            return text
+        }
+
+        // Gradle config: only written if genuinely missing - never
+        // overwrite/patch an existing settings.gradle.kts/build.gradle.kts/
+        // gradle.properties (arbitrary existing content, not safe to
+        // pattern-match).
+        val settingsFile = File(gradleFilesDir, "settings.gradle.kts")
+        if (!settingsFile.exists()) {
+            settingsFile.writeText(
+                renderTemplate(
+                    "settings.gradle.kts.template",
+                    mapOf("OEPM_TOOL_PATH" to oepmToolPath, "ROOT_PROJECT_NAME" to rootProjectName),
+                ),
+            )
+        } else {
+            logger.warn("${settingsFile.path} already exists - left untouched. Needs: includeBuild(\"$oepmToolPath\")")
+        }
+
+        val propertiesFile = File(gradleFilesDir, "gradle.properties")
+        if (!propertiesFile.exists()) {
+            propertiesFile.writeText(renderTemplate("gradle.properties.template", mapOf("OEPM_TOOL_PATH" to oepmToolPath)))
+        } else {
+            logger.warn("${propertiesFile.path} already exists - left untouched. Needs: oepmToolPath=$oepmToolPath")
+        }
+
+        val buildFile = File(gradleFilesDir, "build.gradle.kts")
+        if (!buildFile.exists()) {
+            // Only the new .oepm/ layout needs projectRoot pointed back up
+            // at targetDir - the legacy/root layout has Gradle's own
+            // project directory already equal to the ABL project root, so
+            // the default (unset) behavior is correct there.
+            val projectRootBlock = if (legacyLayout) "" else "\n    projectRoot.set(file(\"..\"))"
+            buildFile.writeText(renderTemplate("build.gradle.kts.template", mapOf("PROJECT_ROOT_BLOCK" to projectRootBlock)))
+        } else {
+            logger.warn("${buildFile.path} already exists - left untouched. Needs id(\"io.github.erudys27.oepm\") applied.")
+        }
+
+        // Registries live in oepm-registries.properties, independent of
+        // build.gradle.kts's state - so these get applied even when
+        // build.gradle.kts already existed and was left untouched above.
+        // Non-destructive: only appends entries that aren't already there
+        // (same name+prefix -> already done, skip silently; same name or
+        // prefix but different content -> a real conflict, warn and skip
+        // just that one entry rather than aborting the whole task).
+        if (registries.isNotEmpty()) {
+            val registriesFile = File(targetDir, "oepm-registries.properties")
+            val existing =
+                if (registriesFile.exists()) {
+                    val props = Properties()
+                    registriesFile.inputStream().use { props.load(it) }
+                    props.stringPropertyNames()
+                        .mapNotNull { key -> key.removeSuffix(".prefix").takeIf { key.endsWith(".prefix") } }
+                        .associateWith { name -> props.getProperty("$name.prefix") to props.getProperty("$name.catalogUrl") }
+                } else {
+                    emptyMap()
+                }
+
+            val toAppend = StringBuilder()
+            for ((prefix, url) in registries) {
+                val name = prefix.trimEnd('.')
+                val current = existing[name]
+                when {
+                    current == (prefix to url) -> {} // already there, nothing to do
+                    current != null ->
+                        logger.warn(
+                            "oepm-registries.properties already has \"$name\" with different values - left untouched",
+                        )
+                    existing.values.any { it.first == prefix } ->
+                        logger.warn("oepm-registries.properties already has prefix \"$prefix\" under a different name")
+                    else -> toAppend.append("$name.prefix=$prefix\n$name.catalogUrl=$url\n")
+                }
+            }
+            if (toAppend.isNotEmpty()) {
+                val needsLeadingNewline =
+                    registriesFile.exists() && registriesFile.length() > 0 && !registriesFile.readText().endsWith("\n")
+                registriesFile.appendText((if (needsLeadingNewline) "\n" else "") + toAppend.toString())
+            }
+        }
+
+        // openedge-project.json: generate fresh if missing, else patch in
+        // only the oepm-specific fields that are missing - real existing
+        // content (buildPath, oeversion, etc.) untouched. package_name
+        // resolution (explicit -> infer from .cls files -> ask the caller
+        // to prompt) is the same either way.
+        val manifestFile = File(targetDir, "openedge-project.json")
+        if (!manifestFile.exists()) {
+            val packageName = resolvePackageName(explicitPackageName, File(targetDir, "src"))
+            manifestFile.writeText(
+                renderTemplate(
+                    "openedge-project.json.template",
+                    mapOf("PROJECT_NAME" to rootProjectName, "PACKAGE_NAME" to packageName),
+                ),
+            )
+            logger.lifecycle("Generated openedge-project.json (package_name: \"$packageName\")")
+        } else {
+            val json = org.json.JSONObject(manifestFile.readText())
+            var patched = false
+
+            if (!json.has("dependencies")) {
+                json.put("dependencies", org.json.JSONObject())
+                patched = true
+            }
+
+            if (!json.has("package_name")) {
+                val sourceRoot =
+                    json.optJSONArray("buildPath")?.let { entries ->
+                        (0 until entries.length())
+                            .map { entries.getJSONObject(it) }
+                            .firstOrNull { it.optString("type") == "source" }
+                            ?.optString("path")
+                    } ?: "src"
+                val packageName = resolvePackageName(explicitPackageName, File(targetDir, sourceRoot))
+                json.put("package_name", packageName)
+                logger.lifecycle("Added package_name: \"$packageName\" to openedge-project.json")
+                patched = true
+            }
+
+            if (patched) {
+                manifestFile.writeText(json.toString(2))
+            } else {
+                logger.lifecycle("openedge-project.json already has everything oepm needs - left untouched")
+            }
+        }
+
+        logger.lifecycle("oepm wiring is set up at ${targetDir.path}")
+        if (registries.isEmpty()) {
+            logger.lifecycle("  - Add a registry: oepm registry add <prefix> <url> (writes oepm-registries.properties)")
+        }
+        logger.lifecycle("  - cd ${targetDir.path} && oepm.bat install <package_name>")
+    }
+}
+
+/**
+ * Resolves package_name for either a fresh or a patched manifest: an
+ * explicit value wins outright; otherwise, best-effort namespace
+ * inference from .cls files under sourceRoot (mirroring
+ * oepm.manifest.PackageNameInferrer's regex - duplicated, not imported:
+ * build.gradle.kts's own script compilation happens before this project's
+ * main sourceSet - src/main/kotlin/oepm/... - is available to import
+ * from). Throws a distinctly-markered error the oepm-init wrapper script
+ * looks for, so it can fall back to prompting interactively rather than
+ * just failing outright.
+ */
+fun resolvePackageName(explicit: String?, sourceRoot: File): String {
+    if (explicit != null) return explicit
+
+    val classDeclaration = Regex("""(?im)^\s*class\s+([A-Za-z_][\w.]*)\s*:""")
+    val namespaces =
+        sourceRoot
+            .walkTopDown()
+            .filter { it.isFile && it.extension.equals("cls", ignoreCase = true) }
+            .mapNotNull { file -> classDeclaration.find(file.readText())?.groupValues?.get(1) }
+            .map { it.substringBeforeLast('.') }
+            .toSet()
+
+    return when (namespaces.size) {
+        1 -> namespaces.single()
+        else -> throw GradleException(
+            "PACKAGE_NAME_REQUIRED: could not infer package_name from .cls files under ${sourceRoot.path} " +
+                "(found: $namespaces)",
+        )
+    }
 }
