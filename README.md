@@ -73,16 +73,18 @@ docs/
   spec/          the actual manifest/lockfile/PROPATH specification
   research/      background analysis that informed the decisions
 src/main/kotlin/oepm/
-  OepmPlugin.kt      Gradle plugin entrypoint — registers oepmInstall/oepmPropath tasks,
-                     the registries{}/registryRoot/cacheDir DSL, supports
-                     -PoepmAdd=<package_name>[:<versionSpec>] to add + resolve in one step
+  OepmPlugin.kt      Gradle plugin entrypoint — registers oepmInstall/oepmPropath/
+                     oepmRegistryAdd tasks, the registries{}/registryRoot/projectRoot/
+                     cacheDir DSL, supports -PoepmAdd=<package_name>[:<versionSpec>]
+                     to add + resolve in one step
   manifest/          reads/writes oepm's manifest fields in openedge-project.json
                      (ManifestReader, BuildPathUpdater, DependenciesUpdater), the
                      DependencySpec union type (registry-routed vs. direct-source)
   registry/          Registry implementations: LocalDirectoryRegistry (local folder,
                      original v1), CatalogRegistry (remote git catalog),
                      PrefixRoutingRegistry (routes by configured prefix), PackageMatcher
-                     (shared candidate-matching logic)
+                     (shared candidate-matching logic), RegistriesPropertiesFile
+                     (oepm-registries.properties reading/appending)
   fetch/             git plumbing: GitCli (process wrapper), GitPackageFetcher (shallow
                      clone + manifest read, shared by CatalogRegistry and direct-source deps)
   lock/              oepm.lock reading + integrity verification against it
@@ -96,9 +98,16 @@ src/functionalTest/kotlin/oepm/ Gradle TestKit tests — apply the real plugin t
                                  throwaway project and run its tasks for real, using
                                  this repo's own small fixture packages
                                  (src/functionalTest/resources/fixtures/)
+scaffold/templates/    templates scaffoldProject renders into a new/existing project
+                       (settings.gradle.kts, build.gradle.kts, gradle.properties,
+                       openedge-project.json)
 oepm / oepm.bat        thin CLI wrapper — translates `oepm install <package>` /
-                        `oepm propath` into the equivalent ./gradlew calls
-build.gradle.kts       plugin build config (Kotlin, Java 17 toolchain)
+                       `oepm propath` / `oepm registry add` into the equivalent
+                       ./gradlew calls; auto-detects the .oepm/ vs. root-level layout
+oepm-init / oepm-init.bat  interactive wrapper around the scaffoldProject task - see
+                           "Per-machine setup" below
+build.gradle.kts       plugin build config (Kotlin, Java 17 toolchain), plus the
+                       scaffoldProject task itself
 ```
 
 The Gradle wrapper (`gradlew`/`gradlew.bat`) is checked in.
@@ -154,6 +163,52 @@ Two ways to consume the plugin — pick based on whether you're developing
    editing `settings.gradle.kts`. This only works within a team sharing
    consistent clone locations; it isn't viable for an arbitrary external user.
 
+   Setting all of this up by hand is repetitive — **`oepm-init`** does it
+   for you instead, interactively, from *your own project's* terminal
+   (new or already-existing project, doesn't matter):
+   ```
+   cd my-project                          # your project - new or existing
+   /path/to/oepm-tool/oepm-init           # oepm-init.bat on Windows
+   ```
+   It prompts for however many registries you want to add, then wires
+   everything up. For a genuinely fresh project, Gradle's own files
+   (wrapper, `settings.gradle.kts`, `build.gradle.kts`, `gradle.properties`)
+   go into a `.oepm/` subfolder, so the project root only shows what's
+   actually yours:
+   ```
+   my-project/
+     .oepm/              Gradle wrapper, settings/build.gradle.kts, gradle.properties - never need touching
+     openedge-project.json
+     oepm-registries.properties
+     oepm / oepm.bat
+     src/
+   ```
+   `oepm`/`oepm.bat` auto-detect this layout (vs. Gradle files at the
+   root, for an already-set-up project that predates this - e.g. this
+   repo's own demo app) and route to the right one, so the same two
+   scripts work either way with no migration needed for existing
+   projects. Everything else about `oepm-init`: never overwrites
+   `settings.gradle.kts`/`build.gradle.kts`/`gradle.properties` if they
+   already exist (warns and tells you what to add by hand instead), and
+   generates or **patches** `openedge-project.json` — if one already
+   exists (e.g. from vscode-abl), only the missing oepm-specific fields
+   (`package_name`, `dependencies`) are added; everything else is left
+   untouched. `package_name` is auto-inferred from your project's real
+   `.cls` files when possible (same namespace-scanning
+   `oepm.manifest.PackageNameInferrer` already does for a package's own
+   manifest); if it can't be inferred, `oepm-init` asks for it directly
+   rather than failing. Safe to re-run — already-correct files are left
+   alone.
+
+   Under the hood this calls oepm-tool's own `scaffoldProject` Gradle
+   task (a plain task in `build.gradle.kts`, not something the plugin
+   itself registers — a not-yet-wired project has no build to run a task
+   against yet), which can also be invoked directly:
+   ```
+   ./gradlew scaffoldProject -PtargetDir=<path> [-ProotProjectName=<name>] \
+       [-PpackageName=<name>] [-Pregistries=<prefix1>=<url1>[,<prefix2>=<url2>,...]]
+   ```
+
 **Option B — published coordinate (for actually using `oepm`, once it's
 been published somewhere — see [ADR-0008](docs/decisions/0008-plugin-publishing-v1.md)):**
 
@@ -176,8 +231,24 @@ current version to a local, disposable folder by default
 
 ## Remote registries
 
-Configure any number of registries in the consumer's `build.gradle.kts`:
+Registries come from two mergeable sources — a prefix declared in both is
+a duplicate-prefix error, same as declaring it twice in one source.
 
+**`oepm-registries.properties`** (project root) — the CLI-mutable one,
+meant to be committed like any other project config, not gitignored:
+```
+ba.prefix=ba.
+ba.catalogUrl=https://github.com/erudys27/registry-ba.git
+```
+Add to it with `oepm registry add <prefix> <url> [<name>]`, or just
+`oepm registry add` with no arguments for an interactive prompt (`name`
+defaults to the prefix without its trailing `.`) — this is what
+`oepm-init`/`scaffoldProject` write to as well, and it's safe to
+programmatically append to. Never hand-patched by oepm itself otherwise.
+
+**`registries {}`** in `build.gradle.kts` — the hand-authored DSL,
+richer/more explicit, for when you're editing the build script directly
+anyway:
 ```kotlin
 oepm {
     registries {
@@ -200,9 +271,9 @@ set up by hand. See
 for a real, working example (two registries, a transitive dependency, and
 a direct-source dependency, all live).
 
-If `registries {}` is left empty, `oepmInstall` falls back to the original
-`LocalDirectoryRegistry` behavior via `registryRoot` — a plain local
-folder, one subfolder per package.
+If neither source has any entries, `oepmInstall` falls back to the
+original `LocalDirectoryRegistry` behavior via `registryRoot` — a plain
+local folder, one subfolder per package.
 
 ## Getting started
 

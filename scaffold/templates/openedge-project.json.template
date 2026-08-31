@@ -1,0 +1,9 @@
+{
+  "name": "{{PROJECT_NAME}}",
+  "version": "1.0.0",
+  "package_name": "{{PACKAGE_NAME}}",
+  "dependencies": {},
+  "buildPath": [
+    { "path": "src", "type": "source" }
+  ]
+}

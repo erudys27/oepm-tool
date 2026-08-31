@@ -12,7 +12,9 @@ import oepm.registry.CatalogRegistry
 import oepm.registry.LocalDirectoryRegistry
 import oepm.registry.PrefixRoutingRegistry
 import oepm.registry.Registry
+import oepm.registry.RegistriesPropertiesFile
 import oepm.resolver.DependencyResolver
+import org.gradle.api.GradleException
 import org.gradle.api.Named
 import org.gradle.api.NamedDomainObjectContainer
 import org.gradle.api.Plugin
@@ -43,6 +45,14 @@ abstract class GitRegistrySpec
 abstract class OepmExtension
     @Inject
     constructor(objects: ObjectFactory) {
+        // Where the actual ABL project (openedge-project.json, src/,
+        // oepm-registries.properties, oepm.lock, oepm_packages/) lives.
+        // Defaults to wherever build.gradle.kts itself is - identical to
+        // today's behavior for any project that doesn't set this. Only
+        // needs setting explicitly when Gradle's own project directory
+        // isn't the ABL project root - e.g. a scaffolded project keeping
+        // Gradle's own files in a .oepm/ subfolder sets this to file("..").
+        abstract val projectRoot: DirectoryProperty
         abstract val registryRoot: DirectoryProperty
         abstract val cacheDir: DirectoryProperty
 
@@ -55,7 +65,8 @@ abstract class OepmExtension
 class OepmPlugin : Plugin<Project> {
     override fun apply(project: Project) {
         val extension = project.extensions.create("oepm", OepmExtension::class.java)
-        extension.registryRoot.convention(project.layout.projectDirectory)
+        extension.projectRoot.convention(project.layout.projectDirectory)
+        extension.registryRoot.convention(extension.projectRoot)
         extension.cacheDir.convention(
             project.layout.dir(
                 project.provider {
@@ -73,7 +84,8 @@ class OepmPlugin : Plugin<Project> {
                 "Resolves the project's declared dependencies. " +
                 "Pass -PoepmAdd=<package_name>[:<versionSpec>] to add and resolve a new dependency in one step."
             task.doLast {
-                val manifestFile = project.projectDir.resolve("openedge-project.json")
+                val projectRoot = extension.projectRoot.get().asFile
+                val manifestFile = projectRoot.resolve("openedge-project.json")
                 val registry = buildRegistry(extension)
                 val manifest = ManifestReader.read(manifestFile)
 
@@ -114,7 +126,7 @@ class OepmPlugin : Plugin<Project> {
                 // force-moved git tag), fail loudly before anything on
                 // disk changes, not after. Hashed once here and reused
                 // below when writing the new lockfile.
-                val existingLock = LockfileReader.read(project.projectDir.resolve("oepm.lock"))
+                val existingLock = LockfileReader.read(projectRoot.resolve("oepm.lock"))
                 val integrities =
                     resolvedPackages.mapValues { (packageName, resolvedPackage) ->
                         val integrity = DirectoryHash.hash(resolvedPackage.sourceDir)
@@ -125,7 +137,7 @@ class OepmPlugin : Plugin<Project> {
                 val resolved =
                     resolvedPackages.mapValues { (packageName, resolvedPackage) ->
                         val destination =
-                            project.projectDir
+                            projectRoot
                                 .resolve("oepm_packages")
                                 .resolve(packageName)
                                 .resolve("src")
@@ -151,7 +163,7 @@ class OepmPlugin : Plugin<Project> {
                     )
                 }
                 val lockJson = JSONObject().put("resolved", resolvedJson)
-                project.projectDir.resolve("oepm.lock").writeText(lockJson.toString(2))
+                projectRoot.resolve("oepm.lock").writeText(lockJson.toString(2))
 
                 val dependencySourcePaths = resolved.keys.map { packageName -> "oepm_packages/$packageName/src" }
                 BuildPathUpdater.ensureSourceEntries(manifestFile, dependencySourcePaths)
@@ -164,45 +176,87 @@ class OepmPlugin : Plugin<Project> {
             task.group = "oepm"
             task.description = "Prints the generated PROPATH for the project."
             task.doLast {
-                val manifest = ManifestReader.read(project.projectDir.resolve("openedge-project.json"))
-                val propath = PropathGenerator.generate(project.projectDir, manifest)
+                val projectRoot = extension.projectRoot.get().asFile
+                val manifest = ManifestReader.read(projectRoot.resolve("openedge-project.json"))
+                val propath = PropathGenerator.generate(projectRoot, manifest)
                 project.logger.lifecycle(propath.joinToString(System.lineSeparator()))
+            }
+        }
+
+        project.tasks.register("oepmRegistryAdd") { task ->
+            task.group = "oepm"
+            task.description =
+                "Adds a registry entry to oepm-registries.properties. " +
+                "Usage: -PregistryPrefix=<prefix> -PcatalogUrl=<url> [-PregistryName=<name>]"
+            task.doLast {
+                val prefix =
+                    project.findProperty("registryPrefix") as String?
+                        ?: throw GradleException(
+                            "Missing -PregistryPrefix=<prefix>. Usage: -PregistryPrefix=<prefix> " +
+                                "-PcatalogUrl=<url> [-PregistryName=<name>]",
+                        )
+                val catalogUrl =
+                    project.findProperty("catalogUrl") as String?
+                        ?: throw GradleException(
+                            "Missing -PcatalogUrl=<url>. Usage: -PregistryPrefix=<prefix> " +
+                                "-PcatalogUrl=<url> [-PregistryName=<name>]",
+                        )
+                val name = project.findProperty("registryName") as String? ?: prefix.trimEnd('.')
+
+                val file = extension.projectRoot.get().asFile.resolve("oepm-registries.properties")
+                RegistriesPropertiesFile.add(file, name, prefix, catalogUrl)
+                project.logger.lifecycle("oepm registry add: added \"$name\" ($prefix -> $catalogUrl) to ${file.name}")
             }
         }
     }
 }
 
 /**
- * If no remote registries are configured, behaves exactly as before
+ * Registries come from two mergeable sources: the registries{} DSL block
+ * (hand-authored, in build.gradle.kts) and oepm-registries.properties
+ * (see RegistriesPropertiesFile - a second source specifically because
+ * it's safe to programmatically append to, unlike an arbitrary existing
+ * build.gradle.kts; oepmRegistryAdd and scaffoldProject both write to it).
+ * A prefix declared in both sources - or twice in the same source - is a
+ * duplicate-prefix error, not a silent pick.
+ *
+ * If neither source has any entries, behaves exactly as before
  * (LocalDirectoryRegistry against registryRoot) for backward compatibility.
- * Otherwise builds a PrefixRoutingRegistry over the configured registries
- * — registryRoot is not silently merged in, to avoid an ambiguous
- * "no prefix matched, fall back to local?" behavior.
+ * registryRoot is never silently merged in alongside real registries, to
+ * avoid an ambiguous "no prefix matched, fall back to local?" behavior.
  */
 private fun buildRegistry(extension: OepmExtension): Registry {
-    if (extension.registries.isEmpty()) {
+    val fileEntries = RegistriesPropertiesFile.read(extension.projectRoot.get().asFile.resolve("oepm-registries.properties"))
+
+    if (extension.registries.isEmpty() && fileEntries.isEmpty()) {
         return LocalDirectoryRegistry(extension.registryRoot.get().asFile)
     }
 
     val cacheRoot = extension.cacheDir.get().asFile
     val ownerByPrefix = LinkedHashMap<String, String>()
     val delegatesByPrefix = LinkedHashMap<String, Registry>()
-    for (spec in extension.registries) {
-        val prefix = spec.prefix.get()
+
+    fun addEntry(name: String, prefix: String, catalogUrl: String, catalogRef: String) {
         val existingOwner = ownerByPrefix[prefix]
         require(existingOwner == null) {
-            "Duplicate registry prefix \"$prefix\": both \"$existingOwner\" and \"${spec.name}\" declare it"
+            "Duplicate registry prefix \"$prefix\": both \"$existingOwner\" and \"$name\" declare it"
         }
-        ownerByPrefix[prefix] = spec.name
-
+        ownerByPrefix[prefix] = name
         delegatesByPrefix[prefix] =
             CatalogRegistry(
-                registryName = spec.name,
+                registryName = name,
                 prefix = prefix,
-                catalogUrl = spec.catalogUrl.get(),
-                catalogRef = spec.catalogRef.getOrElse("main"),
-                cacheDir = File(cacheRoot, spec.name),
+                catalogUrl = catalogUrl,
+                catalogRef = catalogRef,
+                cacheDir = File(cacheRoot, name),
             )
+    }
+
+    for (spec in extension.registries) {
+        addEntry(spec.name, spec.prefix.get(), spec.catalogUrl.get(), spec.catalogRef.getOrElse("main"))
+    }
+    for (entry in fileEntries) {
+        addEntry(entry.name, entry.prefix, entry.catalogUrl, entry.catalogRef ?: "main")
     }
 
     return PrefixRoutingRegistry(delegatesByPrefix)
