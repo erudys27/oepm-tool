@@ -28,7 +28,7 @@ while true; do
         registries="$prefix=$url"
     fi
 
-    read -r -p "Add another registry? [y/N]: " again
+    read -r -p "Add another registry? [y/n]: " again
     case "$again" in
         [yY]*) ;;
         *) break ;;
