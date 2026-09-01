@@ -45,11 +45,12 @@ class GitPackageFetcherTest {
         assertEquals("ba.greeter", resolved.packageName)
         assertEquals("1.0.1", resolved.version)
         assertEquals("src", resolved.sourceDir.name)
-        assertEquals(destDir, resolved.projectDir)
+        assertEquals(File(destDir, "v1.0.1"), resolved.projectDir)
+        assertEquals(true, File(destDir, "_bare.git/HEAD").exists())
     }
 
     @Test
-    fun `reuses an already-cloned destination instead of cloning again`() {
+    fun `reuses an already-checked-out worktree instead of fetching again`() {
         val remotesRoot = createTempDirectory("oepm-fetcher-remotes").toFile()
         val repo = packageRepo(remotesRoot, "greeter-repo", "greeter", "1.0.1")
         val destDir = File(createTempDirectory("oepm-fetcher-dest").toFile(), "greeter")
@@ -58,6 +59,36 @@ class GitPackageFetcherTest {
         val second = GitPackageFetcher.fetch("ba.greeter", repo.absolutePath, "v1.0.1", destDir)
 
         assertEquals("1.0.1", second.version)
+    }
+
+    @Test
+    fun `a second version of the same package reuses the bare cache and adds a second worktree`() {
+        val remotesRoot = createTempDirectory("oepm-fetcher-remotes").toFile()
+        val repo = packageRepo(remotesRoot, "greeter-repo", "greeter", "1.0.1")
+        File(repo, "openedge-project.json").writeText(
+            """
+            {
+              "name": "greeter-repo-project",
+              "version": "1.0.2",
+              "package_name": "greeter",
+              "dependencies": {},
+              "buildPath": [{ "type": "source", "path": "src" }]
+            }
+            """.trimIndent(),
+        )
+        File(repo, "src/marker.i").writeText("/* greeter source marker v2 */")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-m", "bump to 1.0.2")
+        git(repo, "tag", "v1.0.2")
+        val destDir = File(createTempDirectory("oepm-fetcher-dest").toFile(), "greeter")
+
+        val first = GitPackageFetcher.fetch("ba.greeter", repo.absolutePath, "v1.0.1", destDir)
+        val second = GitPackageFetcher.fetch("ba.greeter", repo.absolutePath, "v1.0.2", destDir)
+
+        assertEquals("1.0.1", first.version)
+        assertEquals("1.0.2", second.version)
+        assertEquals(true, File(destDir, "v1.0.1/.git").exists())
+        assertEquals(true, File(destDir, "v1.0.2/.git").exists())
     }
 
     @Test
