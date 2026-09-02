@@ -139,7 +139,7 @@ class OepmPlugin : Plugin<Project> {
                         val destination =
                             projectRoot
                                 .resolve("oepm_packages")
-                                .resolve(packageName)
+                                .resolve(resolvedPackage.installSubpath ?: packageName)
                                 .resolve("src")
                         destination.deleteRecursively()
                         resolvedPackage.sourceDir.copyRecursively(destination, overwrite = true)
@@ -165,7 +165,10 @@ class OepmPlugin : Plugin<Project> {
                 val lockJson = JSONObject().put("resolved", resolvedJson)
                 projectRoot.resolve("oepm.lock").writeText(lockJson.toString(2))
 
-                val dependencySourcePaths = resolved.keys.map { packageName -> "oepm_packages/$packageName/src" }
+                val dependencySourcePaths =
+                    resolved.map { (packageName, resolvedPackage) ->
+                        "oepm_packages/${resolvedPackage.installSubpath ?: packageName}/src"
+                    }
                 BuildPathUpdater.ensureSourceEntries(manifestFile, dependencySourcePaths)
 
                 project.logger.lifecycle("oepm install: resolved ${resolved.size} dependencies")

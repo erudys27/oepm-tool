@@ -36,7 +36,10 @@ import java.io.File
  * Cache layout under cacheDir (one CatalogRegistry per configured
  * registry, so cacheDir is already scoped to this registry's name):
  *   _catalog/                 full clone of the catalog repo
- *   <local_name>/             shallow clone of that package's own repo
+ *   <local_name>/_bare.git/   bare clone of that package's own repo (see
+ *                             GitPackageFetcher - no package files, just
+ *                             the git history, shared across versions)
+ *   <local_name>/<ref>/       worktree checkout of the version actually used
  */
 class CatalogRegistry(
     private val registryName: String,
@@ -78,7 +81,9 @@ class CatalogRegistry(
         val reference = readReference(referenceFile, packageName)
         val packageDir = File(cacheDir, localName)
 
-        return GitPackageFetcher.fetch(packageName, reference.repoUrl, reference.ref, packageDir)
+        val fetched = GitPackageFetcher.fetch(packageName, reference.repoUrl, reference.ref, packageDir)
+        val installSubpath = prefix.trimEnd('.').takeIf { it.isNotEmpty() }?.let { "$it/$localName" }
+        return fetched.copy(installSubpath = installSubpath)
     }
 
     /**

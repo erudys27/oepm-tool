@@ -85,7 +85,9 @@ class CatalogRegistryTest {
         assertEquals("example.calculator", resolved?.packageName)
         assertEquals("1.0.0", resolved?.version)
         assertEquals("src", resolved?.sourceDir?.name)
-        assertTrue(File(cacheDir, "example.calculator/.git").exists())
+        assertEquals(null, resolved?.installSubpath)
+        assertTrue(File(cacheDir, "example.calculator/_bare.git/HEAD").exists())
+        assertTrue(File(cacheDir, "example.calculator/v1.0.0/.git").exists())
         assertFalse(File(cacheDir, "example.greeter").exists())
     }
 
@@ -130,10 +132,11 @@ class CatalogRegistryTest {
     }
 
     @Test
-    fun `a package is fetched as a shallow clone, not full history`() {
+    fun `a package's worktree is checked out at exactly the resolved ref, even though the bare cache holds full history`() {
         val remotesRoot = createTempDirectory("oepm-catalog-remotes").toFile()
         val calculatorRepo = packageRepo(remotesRoot, "calculator-package", "example.calculator", "1.0.0")
-        // A second commit in the source repo so a full clone would carry >1 commit.
+        // A commit after the tag, so the worktree (checked out at the tag)
+        // must not see it even though the bare repo's history does.
         File(calculatorRepo, "src/extra.i").writeText("/* extra */")
         commitAll(calculatorRepo, "second commit")
         val catalog = catalogRepo(remotesRoot, mapOf("example.calculator" to (calculatorRepo to "1.0.0")))
@@ -143,9 +146,57 @@ class CatalogRegistryTest {
 
         registry.findAny("example.calculator")
 
-        val packageDir = File(cacheDir, "example.calculator")
-        val commitCount = git(packageDir, "rev-list", "--count", "HEAD").trim()
+        val worktreeDir = File(cacheDir, "example.calculator/v1.0.0")
+        val commitCount = git(worktreeDir, "rev-list", "--count", "HEAD").trim()
         assertEquals("1", commitCount)
+
+        val bareRepoDir = File(cacheDir, "example.calculator/_bare.git")
+        val bareCommitCount = git(bareRepoDir, "rev-list", "--count", "--all").trim()
+        assertEquals("2", bareCommitCount)
+    }
+
+    @Test
+    fun `a second, different version reuses the bare cache and only fetches locally`() {
+        val remotesRoot = createTempDirectory("oepm-catalog-remotes").toFile()
+        val calculatorRepoV1 = packageRepo(remotesRoot, "calculator-package", "example.calculator", "1.0.0")
+        File(calculatorRepoV1, "openedge-project.json").writeText(
+            """
+            {
+              "name": "calculator-package-project",
+              "version": "2.0.0",
+              "package_name": "example.calculator",
+              "dependencies": {},
+              "buildPath": [{ "type": "source", "path": "src" }]
+            }
+            """.trimIndent(),
+        )
+        File(calculatorRepoV1, "src/marker.i").writeText("/* example.calculator source marker v2 */")
+        commitAll(calculatorRepoV1, "bump to 2.0.0")
+        git(calculatorRepoV1, "tag", "v2.0.0")
+
+        val cacheDir = createTempDirectory("oepm-catalog-cache").toFile()
+        val catalog = catalogRepo(remotesRoot, mapOf("example.calculator" to (calculatorRepoV1 to "1.0.0")))
+
+        registry(catalog, cacheDir).findAny("example.calculator")
+        assertTrue(File(cacheDir, "example.calculator/v1.0.0/.git").exists())
+
+        // Re-point the same catalog repo at 2.0.0 and resolve again - same
+        // bare package repo already has both tags, so this is a local
+        // worktree add, not a re-clone; a second worktree lands alongside
+        // the first rather than replacing it.
+        File(catalog, "packages/example.calculator/1.0.0.json").delete()
+        File(catalog, "packages/example.calculator/2.0.0.json").writeText(
+            """
+            { "repoUrl": "${calculatorRepoV1.absolutePath.replace("\\", "\\\\")}", "version": "2.0.0", "ref": "v2.0.0" }
+            """.trimIndent(),
+        )
+        commitAll(catalog, "bump to 2.0.0")
+
+        val resolved = registry(catalog, cacheDir).findAny("example.calculator")
+
+        assertEquals("2.0.0", resolved?.version)
+        assertTrue(File(cacheDir, "example.calculator/v2.0.0/.git").exists())
+        assertTrue(File(cacheDir, "example.calculator/v1.0.0/.git").exists())
     }
 
     @Test
@@ -185,7 +236,9 @@ class CatalogRegistryTest {
         val resolved = registry.findAny("ba.calculator")
 
         assertEquals("ba.calculator", resolved?.packageName)
-        assertTrue(File(cacheDir, "calculator/.git").exists())
+        assertEquals("ba/calculator", resolved?.installSubpath)
+        assertTrue(File(cacheDir, "calculator/_bare.git/HEAD").exists())
+        assertTrue(File(cacheDir, "calculator/v1.0.0/.git").exists())
         assertFalse(File(cacheDir, "ba.calculator").exists())
     }
 

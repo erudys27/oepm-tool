@@ -29,7 +29,7 @@ if "%REGISTRIES%"=="" (
     set REGISTRIES=!REGISTRIES!,%PREFIX%=%URL%
 )
 
-set /p AGAIN="Add another registry? [y/N]: "
+set /p AGAIN="Add another registry? [y/n]: "
 if /I "%AGAIN:~0,1%"=="Y" goto registry_loop
 
 :scaffold

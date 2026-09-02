@@ -99,7 +99,9 @@ object DependencyResolver {
             when (spec) {
                 is DependencySpec.Registry -> registry.resolve(packageKey, spec.versionSpec)
                 is DependencySpec.DirectSource ->
-                    GitPackageFetcher.fetch(packageKey, spec.repoUrl, spec.ref, File(directSourceCacheDir, packageKey))
+                    GitPackageFetcher
+                        .fetch(packageKey, spec.repoUrl, spec.ref, File(directSourceCacheDir, packageKey))
+                        .copy(installSubpath = "_direct/$packageKey")
             }
         resolved[packageKey] = resolvedPackage
         resolvedSpecs[packageKey] = spec

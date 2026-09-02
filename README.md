@@ -263,13 +263,29 @@ oepm {
 A dependency `"ba.calculator": "^1.0.0"` routes to whichever registry's
 prefix it starts with. The registry itself holds no package content —
 just a reference file (`packages/calculator/1.0.0.json`) pointing at the
-package's own dedicated repo + tag; `oepmInstall` shallow-clones that repo
-into a tool-managed cache (`~/.oepm/cache` by default, override with
+package's own dedicated repo + tag; `oepmInstall` fetches that repo into a
+tool-managed cache (`~/.oepm/cache` by default, override with
 `-PoepmCacheDir=...`), same convention as `~/.m2`/`~/.npm` — nothing to
-set up by hand. See
+set up by hand. Each package gets one bare clone (no working-tree files,
+just git history) plus one `git worktree` checkout per version actually
+used, so re-resolving an already-seen version is a local operation and a
+new version of an already-cached package only costs an incremental fetch,
+not a full re-clone. See
 [github.com/erudys27/openedge-package-manager](https://github.com/erudys27/openedge-package-manager)
 for a real, working example (two registries, a transitive dependency, and
 a direct-source dependency, all live).
+
+Installed packages land in `oepm_packages/` nested by which registry
+routed them, so two registries can each have their own same-named package
+without colliding on disk — `"ba.calculator"` lands at
+`oepm_packages/ba/calculator/src`, `"cw.logger"` at
+`oepm_packages/cw/logger/src`. A direct-source dependency (no registry
+involved) lands under `oepm_packages/_direct/<name>/src` instead. This is
+purely a folder-layout convenience — it has no effect on how a package's
+own namespace is resolved or checked for collisions (see the PROPATH
+namespace-collision check above); two packages can still collide on their
+real `package_name` even while living in different `oepm_packages/`
+subfolders.
 
 If neither source has any entries, `oepmInstall` falls back to the
 original `LocalDirectoryRegistry` behavior via `registryRoot` — a plain

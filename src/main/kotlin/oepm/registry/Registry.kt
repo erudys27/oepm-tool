@@ -11,6 +11,16 @@ data class ResolvedPackage(
     // buildPath[0] source folder. Needed to read the package's own
     // dependencies for transitive resolution (see oepm.resolver.DependencyResolver).
     val projectDir: File,
+    // Purely an install-layout hint for OepmPlugin's oepm_packages/ copy
+    // step — where under oepm_packages/ this package should land, e.g.
+    // "ba/calculator" (CatalogRegistry) or "_direct/greeter"
+    // (DependencyResolver's direct-source path). null means "no grouping,
+    // use packageName directly" — LocalDirectoryRegistry's flat layout,
+    // unchanged from before this field existed. Never used for
+    // resolution/keying/collision-detection — see DependencyResolver's
+    // class doc for why prefix inheritance was deliberately kept out of
+    // that logic; this is a separate, purely cosmetic concern.
+    val installSubpath: String? = null,
 )
 
 interface Registry {
