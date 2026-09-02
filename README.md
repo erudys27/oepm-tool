@@ -275,6 +275,18 @@ not a full re-clone. See
 for a real, working example (two registries, a transitive dependency, and
 a direct-source dependency, all live).
 
+Installed packages land in `oepm_packages/` nested by which registry
+routed them, so two registries can each have their own same-named package
+without colliding on disk — `"ba.calculator"` lands at
+`oepm_packages/ba/calculator/src`, `"cw.logger"` at
+`oepm_packages/cw/logger/src`. A direct-source dependency (no registry
+involved) lands under `oepm_packages/_direct/<name>/src` instead. This is
+purely a folder-layout convenience — it has no effect on how a package's
+own namespace is resolved or checked for collisions (see the PROPATH
+namespace-collision check above); two packages can still collide on their
+real `package_name` even while living in different `oepm_packages/`
+subfolders.
+
 If neither source has any entries, `oepmInstall` falls back to the
 original `LocalDirectoryRegistry` behavior via `registryRoot` — a plain
 local folder, one subfolder per package.

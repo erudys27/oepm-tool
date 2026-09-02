@@ -81,7 +81,9 @@ class CatalogRegistry(
         val reference = readReference(referenceFile, packageName)
         val packageDir = File(cacheDir, localName)
 
-        return GitPackageFetcher.fetch(packageName, reference.repoUrl, reference.ref, packageDir)
+        val fetched = GitPackageFetcher.fetch(packageName, reference.repoUrl, reference.ref, packageDir)
+        val installSubpath = prefix.trimEnd('.').takeIf { it.isNotEmpty() }?.let { "$it/$localName" }
+        return fetched.copy(installSubpath = installSubpath)
     }
 
     /**

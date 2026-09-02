@@ -409,4 +409,138 @@ class OepmPluginFunctionalTest {
             "Expected oepmPropath to resolve buildPath entries against abRoot, got:\n${propathResult.output}",
         )
     }
+
+    // --- oepm_packages/ nested-by-prefix layout ---
+
+    /**
+     * functionalTest doesn't compile against the plugin's main sourceSet
+     * (it only exercises the plugin via GradleRunner/withPluginClasspath),
+     * so oepm.fetch.GitCli isn't visible here - a plain ProcessBuilder call
+     * does the same job for building fixture git repos.
+     */
+    private fun git(dir: File, vararg args: String) {
+        val process = ProcessBuilder(listOf("git") + args).directory(dir).redirectErrorStream(true).start()
+        val output = process.inputStream.bufferedReader().readText()
+        val exitCode = process.waitFor()
+        require(exitCode == 0) { "git ${args.joinToString(" ")} failed (exit $exitCode):\n$output" }
+    }
+
+    private fun gitPackageRepo(root: File, folderName: String, packageName: String, version: String): File {
+        val dir = File(root, folderName)
+        dir.mkdirs()
+        git(dir, "init", "-b", "main")
+        git(dir, "config", "user.email", "oepm-test@example.com")
+        git(dir, "config", "user.name", "oepm test")
+        File(dir, "openedge-project.json").writeText(
+            JSONObject()
+                .put("name", "$folderName-project")
+                .put("version", version)
+                .put("package_name", packageName)
+                .put("dependencies", JSONObject())
+                .put("buildPath", JSONArray().put(JSONObject().put("type", "source").put("path", "src")))
+                .toString(2),
+        )
+        val classDir = File(dir, "src/${packageName.replace('.', '/')}")
+        classDir.mkdirs()
+        val className = packageName.substringAfterLast('.').replaceFirstChar { it.uppercase() }
+        File(classDir, "$className.cls").writeText("class $packageName.$className:\nend class.")
+        git(dir, "add", "-A")
+        git(dir, "commit", "-m", "initial")
+        git(dir, "tag", "v$version")
+        return dir
+    }
+
+    @Test
+    fun `oepm_packages nests a catalog-routed package by its registry prefix, and a direct-source one under _direct`() {
+        val remotesRoot = createTempDirectory("oepm-functional-test-nested-remotes").toFile()
+
+        val greeterRepo = gitPackageRepo(remotesRoot, "greeter-repo", "greeter", "1.0.1")
+        val calculatorRepo = gitPackageRepo(remotesRoot, "calculator-repo", "calculator", "1.0.0")
+        // calculator depends on greeter directly by source (no registry involved).
+        File(calculatorRepo, "openedge-project.json").writeText(
+            JSONObject()
+                .put("name", "calculator-repo-project")
+                .put("version", "1.0.0")
+                .put("package_name", "calculator")
+                .put(
+                    "dependencies",
+                    JSONObject().put(
+                        "greeter",
+                        JSONObject().put("repoUrl", greeterRepo.absolutePath.replace("\\", "/")).put("ref", "v1.0.1"),
+                    ),
+                )
+                .put("buildPath", JSONArray().put(JSONObject().put("type", "source").put("path", "src")))
+                .toString(2),
+        )
+        git(calculatorRepo, "add", "-A")
+        git(calculatorRepo, "commit", "-m", "declare direct-source dependency on greeter")
+        // gitPackageRepo() already tagged v1.0.0 at the initial commit - move it to
+        // this one, which is the one that actually declares the greeter dependency.
+        git(calculatorRepo, "tag", "-f", "v1.0.0")
+
+        val catalogDir = File(remotesRoot, "catalog")
+        catalogDir.mkdirs()
+        git(catalogDir, "init", "-b", "main")
+        git(catalogDir, "config", "user.email", "oepm-test@example.com")
+        git(catalogDir, "config", "user.name", "oepm test")
+        File(catalogDir, "packages/calculator").mkdirs()
+        File(catalogDir, "packages/calculator/1.0.0.json").writeText(
+            JSONObject()
+                .put("repoUrl", calculatorRepo.absolutePath.replace("\\", "/"))
+                .put("version", "1.0.0")
+                .put("ref", "v1.0.0")
+                .toString(2),
+        )
+        git(catalogDir, "add", "-A")
+        git(catalogDir, "commit", "-m", "add calculator 1.0.0")
+
+        val projectDir = createTempDirectory("oepm-functional-test-nested-project").toFile()
+        projectDir.resolve("settings.gradle.kts").writeText("""rootProject.name = "nested-fixture"""")
+        projectDir.resolve("build.gradle.kts").writeText(
+            """
+            plugins {
+                id("io.github.erudys27.oepm")
+            }
+
+            oepm {
+                registries {
+                    create("ba") {
+                        prefix.set("ba.")
+                        catalogUrl.set("${catalogDir.absolutePath.replace("\\", "/")}")
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+        projectDir.resolve("openedge-project.json").writeText(
+            JSONObject()
+                .put("name", "nested-fixture")
+                .put("version", "1.0.0")
+                .put("package_name", "example.consumer")
+                .put("dependencies", JSONObject().put("ba.calculator", "^1.0.0"))
+                .put("buildPath", JSONArray().put(JSONObject().put("type", "source").put("path", "src")))
+                .toString(2),
+        )
+
+        val installResult = run(projectDir, "oepmInstall")
+
+        assertTrue(
+            installResult.output.contains("resolved 2 dependencies"),
+            "Expected both ba.calculator and its transitive greeter dependency resolved, got:\n${installResult.output}",
+        )
+        assertTrue(
+            File(projectDir, "oepm_packages/ba/calculator/src/calculator/Calculator.cls").exists(),
+            "Expected the catalog-routed package to be nested under oepm_packages/ba/calculator",
+        )
+        assertTrue(
+            File(projectDir, "oepm_packages/_direct/greeter/src/greeter/Greeter.cls").exists(),
+            "Expected the direct-source dependency to be nested under oepm_packages/_direct/greeter",
+        )
+        assertTrue(
+            buildPathOf(projectDir).containsAll(
+                listOf("oepm_packages/ba/calculator/src", "oepm_packages/_direct/greeter/src"),
+            ),
+            "Expected buildPath to reference the nested paths, got: ${buildPathOf(projectDir)}",
+        )
+    }
 }
