@@ -19,10 +19,10 @@ import kotlin.test.assertTrue
  *
  * The version under test is published to mavenLocal() as a functionalTest
  * task dependency (see build.gradle.kts) - the actual hosting location
- * for real use (a git-repo-hosted Maven repo, per MULTI-REPO-SETUP-PLAN.md)
- * is a different repository pointing at the same kind of Maven-format
- * folder, so this proves the mechanism works without depending on that
- * hosting decision.
+ * for real use (a git-repo-hosted Maven repo — see ADR-0008) is a
+ * different repository pointing at the same kind of Maven-format folder,
+ * so this proves the mechanism works without depending on that hosting
+ * decision.
  */
 class PublishedPluginFunctionalTest {
     @Test
