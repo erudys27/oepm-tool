@@ -95,7 +95,8 @@ registers three Gradle tasks:
   them (full behavior in the walkthrough below). `-PoepmAdd=<package>[:<versionSpec>]`
   adds and resolves a new dependency in the same step.
 - **`oepmPropath`** — prints the project's PROPATH, computed from
-  `buildPath`.
+  `buildPath`'s `"source"` entries. `-PoepmIncludeTests` (`oepm propath --tests`)
+  also includes `"test"` entries, appended after the source ones.
 - **`oepmRegistryAdd`** — appends a registry entry to
   `oepm-registries.properties` (`-PregistryPrefix=... -PcatalogUrl=...`),
   so a registry can be added without hand-editing `build.gradle.kts`.
@@ -299,16 +300,20 @@ happens:
 
 ## Step by step: `oepm propath`
 
-1. **`oepm`/`oepm.bat`/`cli/oepm`** forwards straight to
-   `gradlew oepmPropath` — no arguments needed.
+1. **`oepm`/`oepm.bat`/`cli/oepm`** forwards to `gradlew oepmPropath`
+   (plain `oepm propath`) or `gradlew oepmPropath -PoepmIncludeTests`
+   (`oepm propath --tests`).
 2. **`gradlew`** launches Gradle, applying the plugin the same way as
    above, registering the `oepmPropath` task.
 3. In **`OepmPlugin.kt`**'s `oepmPropath` body:
    a. Reads `openedge-project.json` via **`ManifestReader.kt`** — this
-      includes whatever `buildPath` was last written by `oepmInstall`.
-   b. Calls **`PropathGenerator.kt`**, which turns the manifest's
-      `sourceRoots` into absolute folder paths. No files read or written
-      beyond the manifest — a pure, in-memory transformation.
+      includes whatever `buildPath` was last written by `oepmInstall`,
+      split into `sourceRoots` (`type: "source"`) and `testRoots`
+      (`type: "test"`).
+   b. Calls **`PropathGenerator.kt`**, which turns `sourceRoots` (and, if
+      `-PoepmIncludeTests` was passed, `testRoots` too, appended after)
+      into absolute folder paths. No files read or written beyond the
+      manifest — a pure, in-memory transformation.
    c. Gradle prints the resulting list of absolute paths, one per line —
       that's the PROPATH you'd feed to the ABL compiler/IDE.
 

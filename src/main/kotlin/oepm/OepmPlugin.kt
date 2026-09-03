@@ -177,11 +177,14 @@ class OepmPlugin : Plugin<Project> {
 
         project.tasks.register("oepmPropath") { task ->
             task.group = "oepm"
-            task.description = "Prints the generated PROPATH for the project."
+            task.description =
+                "Prints the generated PROPATH for the project. " +
+                "Pass -PoepmIncludeTests to also include buildPath's \"test\" entries."
             task.doLast {
                 val projectRoot = extension.projectRoot.get().asFile
                 val manifest = ManifestReader.read(projectRoot.resolve("openedge-project.json"))
-                val propath = PropathGenerator.generate(projectRoot, manifest)
+                val includeTests = project.hasProperty("oepmIncludeTests")
+                val propath = PropathGenerator.generate(projectRoot, manifest, includeTests)
                 project.logger.lifecycle(propath.joinToString(System.lineSeparator()))
             }
         }
