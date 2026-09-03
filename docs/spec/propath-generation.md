@@ -39,8 +39,8 @@ between sibling dependencies either, so ties still fall back to
 alphabetical for determinism.
 
 This default only stays low-stakes because of the namespace-relative
-include convention (see `WALKTHROUGH.md` in `demo/exploration/consumer-app`
-and the include-collision findings there): PROPATH order determines which
+include convention (see [ADR-0007](../decisions/0007-namespace-relative-includes.md)
+and the include-collision findings that motivated it): PROPATH order determines which
 *file* wins a bare-filename collision, but if every cross-file include is
 referenced by its namespace-relative path instead of a bare filename,
 there's nothing left for order to silently get wrong. Ordering strategy

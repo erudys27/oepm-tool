@@ -33,8 +33,11 @@ registries — not just a local folder:
 - **Catalog-based registries**: a registry is a small git "catalog" repo
   holding no package content of its own — just one reference file per
   package version (`packages/<name>/<version>.json`) pointing at that
-  package's own dedicated repo + tag. Fetching is a plain shallow git
-  clone, no partial-clone machinery (`oepm/registry/CatalogRegistry`).
+  package's own dedicated repo + tag. Fetching goes through a
+  bare-clone-plus-`git worktree` cache — one clone per package, one
+  worktree per version actually used, so repeat/multi-version fetches are
+  local instead of re-cloning (`oepm/registry/CatalogRegistry`,
+  `oepm/fetch/GitPackageFetcher`).
 - **Direct-source dependencies**: a package's own manifest can depend on
   another package by inline `{repoUrl, ref}` instead of a registry lookup
   — no catalog entry needed for it at all. Always keyed by its own bare
@@ -85,8 +88,9 @@ src/main/kotlin/oepm/
                      PrefixRoutingRegistry (routes by configured prefix), PackageMatcher
                      (shared candidate-matching logic), RegistriesPropertiesFile
                      (oepm-registries.properties reading/appending)
-  fetch/             git plumbing: GitCli (process wrapper), GitPackageFetcher (shallow
-                     clone + manifest read, shared by CatalogRegistry and direct-source deps)
+  fetch/             git plumbing: GitCli (process wrapper), GitPackageFetcher (bare-clone
+                     + git-worktree cache, manifest read, shared by CatalogRegistry and
+                     direct-source deps)
   lock/              oepm.lock reading + integrity verification against it
   integrity/         content hashing for oepm.lock's integrity field
   propath/           turns a project's buildPath into an ordered, absolute PROPATH
@@ -101,9 +105,18 @@ src/functionalTest/kotlin/oepm/ Gradle TestKit tests — apply the real plugin t
 scaffold/templates/    templates scaffoldProject renders into a new/existing project
                        (settings.gradle.kts, build.gradle.kts, gradle.properties,
                        openedge-project.json)
-oepm / oepm.bat        thin CLI wrapper — translates `oepm install <package>` /
-                       `oepm propath` / `oepm registry add` into the equivalent
-                       ./gradlew calls; auto-detects the .oepm/ vs. root-level layout
+oepm / oepm.bat        per-project thin CLI wrapper, scaffolded into each project —
+                       translates `oepm install <package>` / `oepm propath` /
+                       `oepm registry add` into the equivalent ./gradlew calls;
+                       auto-detects the .oepm/ vs. root-level layout; finds its
+                       target project by its own file location, so it works
+                       with zero global setup (CI, a fresh machine, etc.)
+cli/oepm / cli/oepm.bat  the same CLI, but installed once (added to PATH) and
+                       finds its target project by walking upward from your
+                       current directory instead — see "Per-machine setup"
+                       below for why these are two different scripts, not one
+cli/install.sh / cli/install.ps1  one-time, idempotent setup - adds cli/ to
+                       PATH; oepm-init offers to run this automatically
 oepm-init / oepm-init.bat  interactive wrapper around the scaffoldProject task - see
                            "Per-machine setup" below
 build.gradle.kts       plugin build config (Kotlin, Java 17 toolchain), plus the
@@ -143,18 +156,7 @@ Two ways to consume the plugin — pick based on whether you're developing
 **Option A — `includeBuild` (source, for developing `oepm` itself):**
 
 1. **Clone this repo.**
-2. **(Optional) Add this repo's root to your `PATH`** so the `oepm`/`oepm.bat`
-   wrapper scripts can be run without a relative-path prefix from any
-   directory:
-   ```powershell
-   $repoRoot = "<path to your clone>"
-   $currentUserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-   [Environment]::SetEnvironmentVariable("PATH", "$currentUserPath;$repoRoot", "User")
-   ```
-   Open a new terminal afterward — PATH changes don't apply to already-open
-   sessions. This is per-user, per-machine; it isn't part of the repo and
-   doesn't travel with `git clone`.
-3. **The consumer project's `settings.gradle.kts`** needs
+2. **The consumer project's `settings.gradle.kts`** needs
    `pluginManagement { includeBuild("<path-to-your-clone-of-this-repo>") }`
    pointing at wherever *that person* cloned this repo — see
    [openedge-package-manager](https://github.com/erudys27/openedge-package-manager)'s
@@ -208,6 +210,35 @@ Two ways to consume the plugin — pick based on whether you're developing
    ./gradlew scaffoldProject -PtargetDir=<path> [-ProotProjectName=<name>] \
        [-PpackageName=<name>] [-Pregistries=<prefix1>=<url1>[,<prefix2>=<url2>,...]]
    ```
+
+4. **(Optional) Install the global `oepm` CLI** so `oepm install`/
+   `oepm propath`/`oepm registry add` work with no `./`/`.\` prefix, from
+   inside *any* oepm-managed project — set up once, works for every
+   current and future project, no per-project step needed:
+   ```
+   cli/install.sh      # cli\install.ps1 on Windows
+   ```
+   (`oepm-init` also offers to run this for you after scaffolding a
+   project, so this is usually already done by the time you need it.)
+   Both scripts add `cli/` to your `PATH` (idempotent — safe to re-run).
+   Open a new terminal afterward — PATH changes don't apply to
+   already-open sessions, including new tabs in an already-running
+   terminal app; a genuinely new process is required. This is
+   `cli/oepm`/`cli/oepm.bat`, **not**
+   the per-project `oepm`/`oepm.bat` scaffolded into each project — those
+   two look similar but work differently on purpose. The per-project
+   scripts find their target by their own file location (so a project
+   never needs anything installed globally — works out of the box, in CI,
+   on a machine that's never seen `oepm-tool`). `cli/oepm` instead finds
+   its target by walking *upward from your current directory* looking for
+   `openedge-project.json` — the same way `git`/`npm` find their project
+   root from any subfolder — so it's safe to have exactly one copy on
+   `PATH` and have it correctly operate on whichever project you're
+   actually standing in. (Putting a *per-project* `oepm`/`oepm.bat` on
+   PATH instead is a real footgun: it would silently keep operating on
+   wherever that one file lives, regardless of which project's directory
+   you're actually in — this happened for real during development, see
+   the git history/PR for `feature/global-oepm-cli`.)
 
 **Option B — published coordinate (for actually using `oepm`, once it's
 been published somewhere — see [ADR-0008](docs/decisions/0008-plugin-publishing-v1.md)):**
@@ -293,8 +324,8 @@ local folder, one subfolder per package.
 
 ## Getting started
 
-See [openedge-package-manager](https://github.com/erudys27/openedge-package-manager)'s
-own README for a real, working consumer app and its `DEMO-PREP.md`/walkthrough.
+See [openedge-package-manager](https://github.com/erudys27/openedge-package-manager)
+for a real, working consumer app.
 
 To verify the plugin in isolation instead (no dependency on any other repo):
 

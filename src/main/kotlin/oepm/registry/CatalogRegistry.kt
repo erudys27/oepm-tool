@@ -12,10 +12,10 @@ import java.io.File
  * Registry backed by a small "catalog" git repo that holds no package
  * content itself — only one reference file per package version
  * (packages/<local_name>/<version>.json) pointing at that package's own
- * dedicated repo URL + tag. Fetching a package is a plain shallow clone of
- * that dedicated repo, no partial-clone machinery involved: the catalog is
- * small enough to clone in full, and each package repo is small and
- * dedicated to one package.
+ * dedicated repo URL + tag. Fetching a package goes through
+ * GitPackageFetcher's bare-clone-plus-worktree cache, no partial-clone
+ * machinery involved: the catalog is small enough to clone in full, and
+ * each package repo is small and dedicated to one package.
  *
  * "local_name" is packageName (e.g. "ba.calculator") with the registry's
  * own configured prefix stripped (e.g. "calculator"). The routing prefix
@@ -29,9 +29,9 @@ import java.io.File
  * class (oepm.lock, oepm_packages/, dependency map keys).
  *
  * The folder-per-package layout is prep for future multi-version registry
- * support (see NEXT-STEPS.md) — v1 itself still only supports exactly one
- * version per package, same as LocalDirectoryRegistry: more than one
- * version file under a package's folder is a loud error, not a selection.
+ * support — v1 itself still only supports exactly one version per
+ * package, same as LocalDirectoryRegistry: more than one version file
+ * under a package's folder is a loud error, not a selection.
  *
  * Cache layout under cacheDir (one CatalogRegistry per configured
  * registry, so cacheDir is already scoped to this registry's name):

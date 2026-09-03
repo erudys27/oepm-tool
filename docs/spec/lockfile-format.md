@@ -44,10 +44,10 @@ The propath generator (`oepm propath`, per
 from `resolved` at build/generation time; the lockfile only records what
 versions were resolved, not what order they should appear on PROPATH in.
 This keeps the two components decoupled and prevents a stored order from
-going stale relative to the resolved graph. The `demo/exploration`
-walkthrough's hand-written `oepm.lock` predates this decision and still
-has a `propath_order` key — that field is now considered vestigial there,
-not a model to copy.
+going stale relative to the resolved graph. The lockfile `OepmPlugin.kt`
+writes today has no `propath_order` key — if you find an older example
+with one (from before this decision), it's vestigial, not a model to
+copy.
 
 ## Decided: integrity hashing scheme
 
