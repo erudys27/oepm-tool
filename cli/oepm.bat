@@ -66,7 +66,13 @@ if /I "%COMMAND%"=="install" (
 )
 
 if /I "%COMMAND%"=="propath" (
-    call :run_gradle oepmPropath
+    if "%~2"=="" (
+        call :run_gradle oepmPropath
+    ) else if /I "%~2"=="--tests" (
+        call :run_gradle oepmPropath -PoepmIncludeTests
+    ) else (
+        goto usage
+    )
     goto :eof
 )
 
@@ -111,7 +117,8 @@ goto :eof
 echo Usage (running against %PROJECT_ROOT%):
 echo   oepm install                          resolve declared dependencies
 echo   oepm install ^<package^>[:^<versionSpec^>] add + resolve a dependency in one step
-echo   oepm propath                           print the generated PROPATH
+echo   oepm propath [--tests]                 print the generated PROPATH
+echo                                          (--tests also includes buildPath's "test" entries)
 echo   oepm registry add [^<prefix^> ^<url^> [^<name^>]]  add a registry to oepm-registries.properties
 echo                                          (interactive if prefix/url are omitted)
 exit /b 1

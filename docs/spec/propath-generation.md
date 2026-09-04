@@ -47,6 +47,22 @@ there's nothing left for order to silently get wrong. Ordering strategy
 was deliberately not over-engineered for v1 on this basis — it's revisited
 if the include-namespacing convention turns out not to hold everywhere.
 
+## buildPath entry types (decided 2026-09-03)
+
+`buildPath` entries of type `"source"` are always on the PROPATH `oepm
+propath` prints. Entries of type `"test"` are only included when
+explicitly asked for — `oepm propath --tests` (`-PoepmIncludeTests`) —
+appended after the source roots; plain `oepm propath` (the default, used
+implicitly by anything build/production-facing) never includes them.
+This only affects a manifest's *own* test roots: `GitPackageFetcher`/
+`CatalogRegistry` never read a dependency's `"test"` entries at all when
+fetching it, so a dependency's own tests can never end up copied into a
+consumer's `oepm_packages/` or on a consumer's PROPATH, with or without
+the flag — see `docs/spec/manifest-schema.md`'s `buildPath` row. Any
+other `type` value is ignored everywhere for now (a `"resources"`/images
+type was discussed but not decided or built — it would need its own call
+on whether/how it belongs on PROPATH at all).
+
 ## Open questions
 
 - Whether oepm should warn (or fail) when a generated PROPATH would shadow

@@ -58,6 +58,11 @@ registries — not just a local folder:
 - Backward compatible: a project with no `registries {}` configured still
   resolves against a plain local-directory registry
   (`oepm/registry/LocalDirectoryRegistry`), the original v1 behavior.
+- **`buildPath` test entries**: `type: "test"` entries are excluded from
+  `oepm propath`'s output by default, included with `oepm propath --tests`.
+  A dependency's own test entries are never read at all when it's
+  fetched, so they can't leak into a consumer's `oepm_packages/` or
+  PROPATH either way.
 
 See `docs/decisions/` for what's been decided and why, and the open
 questions at the bottom of this file for what hasn't. Still missing: real
