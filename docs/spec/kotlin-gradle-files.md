@@ -26,7 +26,7 @@ Two definitions before the list:
 - **A Gradle plugin** is code that adds new tasks (and other capabilities)
   to a Gradle project. oepm itself *is* a Gradle plugin — this whole repo
   builds one JAR file that other Gradle projects can apply to gain the
-  `oepmInstall`/`oepmPropath`/`oepmRegistryAdd` tasks.
+  `oepmInstall`/`oepmPropath`/`oepmRegistryAdd`/`oepmPrune` tasks.
 
 ## Root project — building the oepm plugin itself
 
@@ -90,7 +90,7 @@ below for how these actually fit together at runtime.
 
 **`OepmPlugin.kt` — the entry point.** When a project applies
 `id("io.github.erudys27.oepm")`, its `apply()` function runs once and
-registers three Gradle tasks:
+registers four Gradle tasks:
 - **`oepmInstall`** — resolves the project's dependencies and installs
   them (full behavior in the walkthrough below). `-PoepmAdd=<package>[:<versionSpec>]`
   adds and resolves a new dependency in the same step.
@@ -100,6 +100,12 @@ registers three Gradle tasks:
 - **`oepmRegistryAdd`** — appends a registry entry to
   `oepm-registries.properties` (`-PregistryPrefix=... -PcatalogUrl=...`),
   so a registry can be added without hand-editing `build.gradle.kts`.
+- **`oepmPrune`** (`oepm prune [--dry-run]`) — re-resolves the dependency
+  graph the same way `oepmInstall` does, then removes any
+  `oepm_packages/` folder (and matching `buildPath` entry) that isn't
+  part of that graph anymore — e.g. a dependency removed from
+  `dependencies` by hand. `-PoepmDryRun` computes and reports what would
+  be removed without deleting or writing anything.
 
 It also defines `OepmExtension`, the `oepm {}` block a project configures:
 `projectRoot` (where the actual ABL project lives — defaults to wherever
@@ -132,7 +138,11 @@ fetched packages are cached — `~/.oepm/cache` by default), and the
 - **`BuildPathUpdater.kt`** — after a dependency is resolved and its
   source copied in, adds that dependency's `oepm_packages/.../src` path
   to the manifest's `buildPath` if it isn't already there. Additive
-  only — never removes or reorders anything, so hand edits survive.
+  only — never removes or reorders anything, so hand edits survive. Its
+  counterpart, `pruneStaleOepmPackagesEntries`, does the opposite for
+  `oepmPrune` — removes only `buildPath` entries that look like ones oepm
+  itself generated (start with `"oepm_packages/"`) and aren't part of the
+  currently-resolved graph, never touching anything else.
 - **`DependenciesUpdater.kt`** — writes a new entry into the manifest's
   `dependencies` map on disk — what `-PoepmAdd=...` uses instead of
   requiring a hand-edit.

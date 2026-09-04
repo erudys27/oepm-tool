@@ -103,6 +103,17 @@ if /I "%COMMAND%"=="registry" (
     goto usage
 )
 
+if /I "%COMMAND%"=="prune" (
+    if "%~2"=="" (
+        call :run_gradle oepmPrune
+    ) else if /I "%~2"=="--dry-run" (
+        call :run_gradle oepmPrune -PoepmDryRun
+    ) else (
+        goto usage
+    )
+    goto :eof
+)
+
 goto usage
 
 :run_gradle
@@ -121,4 +132,6 @@ echo   oepm propath [--tests]                 print the generated PROPATH
 echo                                          (--tests also includes buildPath's "test" entries)
 echo   oepm registry add [^<prefix^> ^<url^> [^<name^>]]  add a registry to oepm-registries.properties
 echo                                          (interactive if prefix/url are omitted)
+echo   oepm prune [--dry-run]                 remove oepm_packages/ entries no longer part of
+echo                                          the resolved dependency graph
 exit /b 1
