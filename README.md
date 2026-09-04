@@ -124,6 +124,9 @@ cli/install.sh / cli/install.ps1  one-time, idempotent setup - adds cli/ to
                        PATH; oepm-init offers to run this automatically
 oepm-init / oepm-init.bat  interactive wrapper around the scaffoldProject task - see
                            "Per-machine setup" below
+cli/oepm-init / cli/oepm-init.bat  thin forwarders to the real oepm-init above -
+                           reachable once cli/ is on PATH, so oepm-init works
+                           from any project too, not just via its full path
 build.gradle.kts       plugin build config (Kotlin, Java 17 toolchain), plus the
                        scaffoldProject task itself
 ```
@@ -177,6 +180,12 @@ Two ways to consume the plugin — pick based on whether you're developing
    cd my-project                          # your project - new or existing
    /path/to/oepm-tool/oepm-init           # oepm-init.bat on Windows
    ```
+   (Once the global CLI below has been installed once, bare `oepm-init`
+   works the same way from any directory — `cli/oepm-init`/`cli/oepm-init.bat`
+   are thin forwarders to this same script, reachable via `PATH` without
+   needing oepm-tool's own root on `PATH` too, which would reintroduce the
+   footgun described below.)
+
    It prompts for however many registries you want to add, then wires
    everything up. For a genuinely fresh project, Gradle's own files
    (wrapper, `settings.gradle.kts`, `build.gradle.kts`, `gradle.properties`)

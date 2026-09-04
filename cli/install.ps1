@@ -5,6 +5,14 @@
 # README.md's "Per-machine setup" for why this is a *separate* script
 # from the per-project oepm/oepm.bat, not the same thing installed
 # differently.
+#
+# -Check: silently exits 0 if already set up, 1 otherwise - no prompts,
+# no writes, no output. Lets a caller (oepm-init.bat) decide whether it's
+# even worth asking, instead of always asking and reporting "already
+# done" after the fact.
+param(
+    [switch]$Check
+)
 
 $cliDir = $PSScriptRoot
 $currentUserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
@@ -12,6 +20,10 @@ $entries = $currentUserPath -split ";" | Where-Object { $_ -ne "" }
 
 $alreadyPresent = $entries | Where-Object {
     $_.TrimEnd('\') -ieq $cliDir.TrimEnd('\')
+}
+
+if ($Check) {
+    if ($alreadyPresent) { exit 0 } else { exit 1 }
 }
 
 if ($alreadyPresent) {

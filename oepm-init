@@ -43,6 +43,12 @@ run_scaffold() {
 }
 
 offer_global_cli() {
+    # Already on PATH? Don't ask - just say so and move on, rather than
+    # asking a question whose answer install.sh would report after the fact.
+    if "$TOOL_DIR/cli/install.sh" --check; then
+        echo "(global oepm CLI is already set up - \"oepm install\" already works from any project)"
+        return
+    fi
     read -r -p "Add the global oepm CLI to PATH, so \"oepm install\" works from any project without ./oepm? [Y/n]: " answer
     case "$answer" in
         [nN]*) ;;
