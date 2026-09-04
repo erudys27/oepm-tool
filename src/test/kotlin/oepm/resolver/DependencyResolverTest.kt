@@ -183,6 +183,7 @@ class DependencyResolverTest {
 
         assertEquals(setOf("greeter"), resolved.keys)
         assertEquals("1.0.1", resolved.getValue("greeter").version)
+        assertEquals("_direct/greeter", resolved.getValue("greeter").installSubpath)
     }
 
     @Test

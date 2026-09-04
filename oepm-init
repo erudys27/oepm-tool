@@ -42,10 +42,29 @@ run_scaffold() {
         "$@"
 }
 
+offer_global_cli() {
+    # Already on PATH? Don't ask - just say so and move on, rather than
+    # asking a question whose answer install.sh would report after the fact.
+    if "$TOOL_DIR/cli/install.sh" --check; then
+        echo "(global oepm CLI is already set up - \"oepm install\" already works from any project)"
+        return
+    fi
+    read -r -p "Add the global oepm CLI to PATH, so \"oepm install\" works from any project without ./oepm? [Y/n]: " answer
+    case "$answer" in
+        [nN]*) ;;
+        *) "$TOOL_DIR/cli/install.sh" ;;
+    esac
+}
+
+finish() {
+    offer_global_cli
+    exit 0
+}
+
 output_file="$(mktemp)"
 if run_scaffold 2>&1 | tee "$output_file"; then
     rm -f "$output_file"
-    exit 0
+    finish
 fi
 
 if grep -q "PACKAGE_NAME_REQUIRED" "$output_file"; then
@@ -54,7 +73,7 @@ if grep -q "PACKAGE_NAME_REQUIRED" "$output_file"; then
     echo "Couldn't automatically determine package_name for your project."
     read -r -p "Enter package_name (e.g. example.myproject): " package_name
     [ -n "$package_name" ] || { echo "package_name is required."; exit 1; }
-    run_scaffold "-PpackageName=$package_name"
+    run_scaffold "-PpackageName=$package_name" && finish
 else
     rm -f "$output_file"
     exit 1

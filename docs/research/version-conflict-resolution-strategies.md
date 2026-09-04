@@ -165,8 +165,8 @@ assignment of versions that satisfies every constraint, backtracking past
 an early choice if it turns out to block a later one.
 
 **Only actually matters once oepm supports multiple versions per package
-in the registry** — a listed future item in `NEXT-STEPS.md`, not
-implemented yet. With today's one-version-per-package-name registry,
+in the registry** — not implemented yet (see "Scope for v1" in
+README.md). With today's one-version-per-package-name registry,
 there is only ever one candidate to consider per name, so a solver and
 the current greedy walk produce the identical result every time. Building
 solver sophistication now would be solving a problem the registry can't

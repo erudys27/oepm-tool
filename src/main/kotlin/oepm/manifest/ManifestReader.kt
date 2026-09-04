@@ -14,13 +14,16 @@ object ManifestReader {
         require(file.exists()) { "Manifest not found: ${file.path}" }
         val json = JSONObject(file.readText())
 
-        val sourceRoots =
+        fun rootsOfType(type: String): List<String> =
             json.optJSONArray("buildPath")?.let { entries ->
                 (0 until entries.length()).mapNotNull { i ->
                     val entry = entries.getJSONObject(i)
-                    entry.optString("path").takeIf { entry.optString("type") == "source" }
+                    entry.optString("path").takeIf { entry.optString("type") == type }
                 }
             } ?: emptyList()
+
+        val sourceRoots = rootsOfType("source")
+        val testRoots = rootsOfType("test")
 
         val packageName =
             if (json.has("package_name")) {
@@ -40,6 +43,7 @@ object ManifestReader {
             packageName = packageName,
             dependencies = dependencies,
             sourceRoots = sourceRoots,
+            testRoots = testRoots,
         )
     }
 

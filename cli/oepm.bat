@@ -1,23 +1,56 @@
 @echo off
 setlocal enabledelayedexpansion
 
-set DIR=%~dp0
-set OEPM_SUBDIR=%DIR%.oepm
+rem Global oepm CLI - install this once (put this file's directory on
+rem PATH) and `oepm install`/`oepm propath`/`oepm registry add` work from
+rem inside ANY oepm-managed project, no per-project ".\oepm.bat" needed.
+rem
+rem Unlike the per-project oepm.bat (copied into each scaffolded project
+rem by scaffoldProject, which finds its target project via its OWN file
+rem location - %~dp0), this script finds its target project from your
+rem CURRENT DIRECTORY, walking upward looking for openedge-project.json -
+rem the same way git/npm find their project root from any subfolder.
+rem That's what makes it safe to put on PATH: it always operates on
+rem whatever project you're actually standing in, never on wherever this
+rem script itself happens to be installed.
+rem
+rem The per-project oepm.bat still exists and still matters - it's what
+rem makes a project fully self-contained and usable without any global
+rem setup (e.g. in CI, or on a machine where this hasn't been installed).
+rem This is a local-dev convenience layered on top, not a replacement.
+
+set "SEARCH_DIR=%CD%"
+
+:find_root
+if exist "%SEARCH_DIR%\openedge-project.json" goto found
+
+for %%I in ("%SEARCH_DIR%\..") do set "PARENT_DIR=%%~fI"
+if /I "%PARENT_DIR%"=="%SEARCH_DIR%" (
+    echo Not inside an oepm project - no openedge-project.json found in %CD% or any parent directory. 1>&2
+    exit /b 1
+)
+set "SEARCH_DIR=%PARENT_DIR%"
+goto find_root
+
+:found
+set "PROJECT_ROOT=%SEARCH_DIR%"
+set "OEPM_SUBDIR=%PROJECT_ROOT%\.oepm"
 
 rem Two layouts a scaffolded project can be in: Gradle's own files tucked
-rem into .oepm/ (new projects), or at this same root (legacy - e.g. the
+rem into .oepm/ (new projects), or at the project root (legacy - e.g. the
 rem real openedge-package-manager demo repo, which predates the .oepm/
-rem layout). Detected automatically so this one script works for both,
-rem with no migration needed for existing projects. Invocation goes
-rem through the :run_gradle subroutine below rather than building a
-rem "-p ..." flag into a variable directly - embedding quotes inside a
-rem batch variable's value doesn't substitute reliably at the call site.
+rem layout). Detected automatically so this one script works for both.
 if exist "%OEPM_SUBDIR%\gradlew.bat" (
-    set GRADLEW=%OEPM_SUBDIR%\gradlew.bat
-    set USE_SUBDIR=1
+    set "GRADLEW=%OEPM_SUBDIR%\gradlew.bat"
+    set "USE_SUBDIR=1"
 ) else (
-    set GRADLEW=%DIR%gradlew.bat
-    set USE_SUBDIR=0
+    set "GRADLEW=%PROJECT_ROOT%\gradlew.bat"
+    set "USE_SUBDIR=0"
+)
+
+if not exist "%GRADLEW%" (
+    echo Found %PROJECT_ROOT%\openedge-project.json, but no gradlew.bat there ^(or in .oepm\^) - is this really an oepm project? 1>&2
+    exit /b 1
 )
 
 if "%~1"=="" goto usage
@@ -81,7 +114,7 @@ if "%USE_SUBDIR%"=="1" (
 goto :eof
 
 :usage
-echo Usage:
+echo Usage (running against %PROJECT_ROOT%):
 echo   oepm install                          resolve declared dependencies
 echo   oepm install ^<package^>[:^<versionSpec^>] add + resolve a dependency in one step
 echo   oepm propath [--tests]                 print the generated PROPATH

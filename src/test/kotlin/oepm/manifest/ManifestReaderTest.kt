@@ -126,6 +126,31 @@ class ManifestReaderTest {
     }
 
     @Test
+    fun `testRoots only includes buildPath entries of type test, in order, separately from sourceRoots`() {
+        val file = createTempFile(suffix = ".json")
+        file.writeText(
+            """
+            {
+              "name": "consumer-app",
+              "version": "1.0.0",
+              "package_name": "example.consumer",
+              "buildPath": [
+                { "type": "source", "path": "src" },
+                { "type": "test", "path": "test" },
+                { "type": "other", "path": "ignored" },
+                { "type": "test", "path": "test/fixtures" }
+              ]
+            }
+            """.trimIndent(),
+        )
+
+        val manifest = ManifestReader.read(file.toFile())
+
+        assertEquals(listOf("src"), manifest.sourceRoots)
+        assertEquals(listOf("test", "test/fixtures"), manifest.testRoots)
+    }
+
+    @Test
     fun `parses a direct-source dependency`() {
         val file = createTempFile(suffix = ".json")
         file.writeText(

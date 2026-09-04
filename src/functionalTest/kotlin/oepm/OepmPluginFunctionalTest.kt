@@ -409,4 +409,232 @@ class OepmPluginFunctionalTest {
             "Expected oepmPropath to resolve buildPath entries against abRoot, got:\n${propathResult.output}",
         )
     }
+
+    // --- oepm_packages/ nested-by-prefix layout ---
+
+    /**
+     * functionalTest doesn't compile against the plugin's main sourceSet
+     * (it only exercises the plugin via GradleRunner/withPluginClasspath),
+     * so oepm.fetch.GitCli isn't visible here - a plain ProcessBuilder call
+     * does the same job for building fixture git repos.
+     */
+    private fun git(dir: File, vararg args: String) {
+        val process = ProcessBuilder(listOf("git") + args).directory(dir).redirectErrorStream(true).start()
+        val output = process.inputStream.bufferedReader().readText()
+        val exitCode = process.waitFor()
+        require(exitCode == 0) { "git ${args.joinToString(" ")} failed (exit $exitCode):\n$output" }
+    }
+
+    private fun gitPackageRepo(root: File, folderName: String, packageName: String, version: String): File {
+        val dir = File(root, folderName)
+        dir.mkdirs()
+        git(dir, "init", "-b", "main")
+        git(dir, "config", "user.email", "oepm-test@example.com")
+        git(dir, "config", "user.name", "oepm test")
+        File(dir, "openedge-project.json").writeText(
+            JSONObject()
+                .put("name", "$folderName-project")
+                .put("version", version)
+                .put("package_name", packageName)
+                .put("dependencies", JSONObject())
+                .put("buildPath", JSONArray().put(JSONObject().put("type", "source").put("path", "src")))
+                .toString(2),
+        )
+        val classDir = File(dir, "src/${packageName.replace('.', '/')}")
+        classDir.mkdirs()
+        val className = packageName.substringAfterLast('.').replaceFirstChar { it.uppercase() }
+        File(classDir, "$className.cls").writeText("class $packageName.$className:\nend class.")
+        git(dir, "add", "-A")
+        git(dir, "commit", "-m", "initial")
+        git(dir, "tag", "v$version")
+        return dir
+    }
+
+    @Test
+    fun `oepm_packages nests a catalog-routed package by its registry prefix, and a direct-source one under _direct`() {
+        val remotesRoot = createTempDirectory("oepm-functional-test-nested-remotes").toFile()
+
+        val greeterRepo = gitPackageRepo(remotesRoot, "greeter-repo", "greeter", "1.0.1")
+        val calculatorRepo = gitPackageRepo(remotesRoot, "calculator-repo", "calculator", "1.0.0")
+        // calculator depends on greeter directly by source (no registry involved).
+        File(calculatorRepo, "openedge-project.json").writeText(
+            JSONObject()
+                .put("name", "calculator-repo-project")
+                .put("version", "1.0.0")
+                .put("package_name", "calculator")
+                .put(
+                    "dependencies",
+                    JSONObject().put(
+                        "greeter",
+                        JSONObject().put("repoUrl", greeterRepo.absolutePath.replace("\\", "/")).put("ref", "v1.0.1"),
+                    ),
+                )
+                .put("buildPath", JSONArray().put(JSONObject().put("type", "source").put("path", "src")))
+                .toString(2),
+        )
+        git(calculatorRepo, "add", "-A")
+        git(calculatorRepo, "commit", "-m", "declare direct-source dependency on greeter")
+        // gitPackageRepo() already tagged v1.0.0 at the initial commit - move it to
+        // this one, which is the one that actually declares the greeter dependency.
+        git(calculatorRepo, "tag", "-f", "v1.0.0")
+
+        val catalogDir = File(remotesRoot, "catalog")
+        catalogDir.mkdirs()
+        git(catalogDir, "init", "-b", "main")
+        git(catalogDir, "config", "user.email", "oepm-test@example.com")
+        git(catalogDir, "config", "user.name", "oepm test")
+        File(catalogDir, "packages/calculator").mkdirs()
+        File(catalogDir, "packages/calculator/1.0.0.json").writeText(
+            JSONObject()
+                .put("repoUrl", calculatorRepo.absolutePath.replace("\\", "/"))
+                .put("version", "1.0.0")
+                .put("ref", "v1.0.0")
+                .toString(2),
+        )
+        git(catalogDir, "add", "-A")
+        git(catalogDir, "commit", "-m", "add calculator 1.0.0")
+
+        val projectDir = createTempDirectory("oepm-functional-test-nested-project").toFile()
+        // Without an explicit cacheDir, this would default to the real
+        // ~/.oepm/cache - fine normally, but this test's package names
+        // ("ba/calculator", "greeter") can collide with genuinely
+        // different content already cached there from real, live use of
+        // this same machine, so a throwaway temp dir keeps this test
+        // fully isolated.
+        val cacheDir = createTempDirectory("oepm-functional-test-nested-cache").toFile()
+        projectDir.resolve("settings.gradle.kts").writeText("""rootProject.name = "nested-fixture"""")
+        projectDir.resolve("build.gradle.kts").writeText(
+            """
+            plugins {
+                id("io.github.erudys27.oepm")
+            }
+
+            oepm {
+                cacheDir.set(file("${cacheDir.absolutePath.replace("\\", "/")}"))
+                registries {
+                    create("ba") {
+                        prefix.set("ba.")
+                        catalogUrl.set("${catalogDir.absolutePath.replace("\\", "/")}")
+                    }
+                }
+            }
+            """.trimIndent(),
+        )
+        projectDir.resolve("openedge-project.json").writeText(
+            JSONObject()
+                .put("name", "nested-fixture")
+                .put("version", "1.0.0")
+                .put("package_name", "example.consumer")
+                .put("dependencies", JSONObject().put("ba.calculator", "^1.0.0"))
+                .put("buildPath", JSONArray().put(JSONObject().put("type", "source").put("path", "src")))
+                .toString(2),
+        )
+
+        val installResult = run(projectDir, "oepmInstall")
+
+        assertTrue(
+            installResult.output.contains("resolved 2 dependencies"),
+            "Expected both ba.calculator and its transitive greeter dependency resolved, got:\n${installResult.output}",
+        )
+        assertTrue(
+            File(projectDir, "oepm_packages/ba/calculator/src/calculator/Calculator.cls").exists(),
+            "Expected the catalog-routed package to be nested under oepm_packages/ba/calculator",
+        )
+        assertTrue(
+            File(projectDir, "oepm_packages/_direct/greeter/src/greeter/Greeter.cls").exists(),
+            "Expected the direct-source dependency to be nested under oepm_packages/_direct/greeter",
+        )
+        assertTrue(
+            buildPathOf(projectDir).containsAll(
+                listOf("oepm_packages/ba/calculator/src", "oepm_packages/_direct/greeter/src"),
+            ),
+            "Expected buildPath to reference the nested paths, got: ${buildPathOf(projectDir)}",
+        )
+    }
+
+    // --- buildPath "test" type ---
+
+    @Test
+    fun `oepmPropath only includes buildPath test entries when -PoepmIncludeTests is passed`() {
+        val registryDir = buildRegistry()
+        val manifest =
+            JSONObject()
+                .put("name", "consumer-app-fixture")
+                .put("version", "1.0.0")
+                .put("package_name", "example.consumer")
+                .put("dependencies", JSONObject())
+                .put(
+                    "buildPath",
+                    JSONArray()
+                        .put(JSONObject().put("type", "source").put("path", "src"))
+                        .put(JSONObject().put("type", "test").put("path", "test")),
+                )
+        val projectDir = buildProject(registryDir, manifest)
+        File(projectDir, "src").mkdirs()
+        File(projectDir, "test").mkdirs()
+
+        val expectedSrcEntry = File(projectDir, "src").absolutePath
+        val expectedTestEntry = File(projectDir, "test").absolutePath
+
+        val withoutFlag = run(projectDir, "oepmPropath")
+        assertTrue(withoutFlag.output.contains(expectedSrcEntry), "Expected source root in output, got:\n${withoutFlag.output}")
+        assertTrue(
+            !withoutFlag.output.contains(expectedTestEntry),
+            "Expected test root NOT in output without -PoepmIncludeTests, got:\n${withoutFlag.output}",
+        )
+
+        val withFlag = run(projectDir, "oepmPropath", "-PoepmIncludeTests")
+        assertTrue(
+            withFlag.output.contains(expectedSrcEntry) && withFlag.output.contains(expectedTestEntry),
+            "Expected both source and test roots with -PoepmIncludeTests, got:\n${withFlag.output}",
+        )
+    }
+
+    @Test
+    fun `a dependency's own test entries are never copied into oepm_packages or added to a consumer's buildPath`() {
+        val registryDir = createTempDirectory("oepm-functional-test-registry-hastests").toFile()
+        val packageDir = File(registryDir, "example.hastests")
+        packageDir.resolve("src/example/hastests").mkdirs()
+        packageDir.resolve("src/example/hastests/Thing.cls").writeText("class example.hastests.Thing:\nend class.\n")
+        packageDir.resolve("test").mkdirs()
+        packageDir.resolve("test/ThingTest.cls").writeText("class ThingTest:\nend class.\n")
+        packageDir.resolve("openedge-project.json").writeText(
+            JSONObject()
+                .put("name", "hastests-package")
+                .put("version", "1.0.0")
+                .put("package_name", "example.hastests")
+                .put("dependencies", JSONObject())
+                .put(
+                    "buildPath",
+                    JSONArray()
+                        .put(JSONObject().put("type", "source").put("path", "src"))
+                        .put(JSONObject().put("type", "test").put("path", "test")),
+                )
+                .toString(2),
+        )
+
+        val manifest =
+            JSONObject()
+                .put("name", "consumer-app-fixture")
+                .put("version", "1.0.0")
+                .put("package_name", "example.consumer")
+                .put("dependencies", JSONObject().put("example.hastests", "^1.0.0"))
+                .put("buildPath", JSONArray().put(JSONObject().put("type", "source").put("path", "src")))
+        val projectDir = buildProject(registryDir, manifest)
+
+        run(projectDir, "oepmInstall")
+
+        assertTrue(
+            File(projectDir, "oepm_packages/example.hastests/src/example/hastests/Thing.cls").exists(),
+            "Expected the dependency's source to be copied into oepm_packages",
+        )
+        assertTrue(
+            !File(projectDir, "oepm_packages/example.hastests/test").exists(),
+            "Expected the dependency's own test folder to never be copied into oepm_packages at all",
+        )
+        assertTrue(
+            "oepm_packages/example.hastests/test" !in buildPathOf(projectDir),
+            "Expected no test-folder entry added to the consumer's buildPath, got: ${buildPathOf(projectDir)}",
+        )
+    }
 }

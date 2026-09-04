@@ -40,7 +40,7 @@ type "%OUTPUT_FILE%"
 
 if %SCAFFOLD_RESULT%==0 (
     del "%OUTPUT_FILE%"
-    exit /b 0
+    goto offer_global_cli
 )
 
 findstr /C:"PACKAGE_NAME_REQUIRED" "%OUTPUT_FILE%" >nul
@@ -54,8 +54,22 @@ if %ERRORLEVEL%==0 (
         exit /b 1
     )
     call "%TOOL_DIR%\gradlew.bat" -p "%TOOL_DIR%" scaffoldProject -PtargetDir="%TARGET_DIR%" -Pregistries="%REGISTRIES%" -PpackageName="!PACKAGE_NAME!"
-    exit /b %ERRORLEVEL%
+    if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+    goto offer_global_cli
 ) else (
     del "%OUTPUT_FILE%"
     exit /b 1
 )
+
+:offer_global_cli
+rem Already on PATH? Don't ask - just say so and move on, rather than
+rem asking a question whose answer install.ps1 would report after the fact.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TOOL_DIR%\cli\install.ps1" -Check
+if %ERRORLEVEL%==0 (
+    echo (global oepm CLI is already set up - "oepm install" already works from any project^)
+    exit /b 0
+)
+set /p ADD_GLOBAL_CLI="Add the global oepm CLI to PATH, so \"oepm install\" works from any project without .\oepm? [Y/n]: "
+if /I "%ADD_GLOBAL_CLI:~0,1%"=="N" exit /b 0
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TOOL_DIR%\cli\install.ps1"
+exit /b 0
