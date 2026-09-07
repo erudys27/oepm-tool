@@ -59,7 +59,10 @@ class CatalogRegistryTest {
                 """.trimIndent(),
             )
         }
-        commitAll(dir, "initial")
+        // An empty catalog (no references passed - tests that add their
+        // own via addReference afterward) has nothing staged yet; a plain
+        // "git commit" would fail with nothing to commit.
+        if (references.isEmpty()) git(dir, "commit", "--allow-empty", "-m", "initial") else commitAll(dir, "initial")
         return dir
     }
 
@@ -199,27 +202,105 @@ class CatalogRegistryTest {
         assertTrue(File(cacheDir, "example.calculator/v1.0.0/.git").exists())
     }
 
-    @Test
-    fun `throws when a package's catalog folder has more than one version file`() {
-        val remotesRoot = createTempDirectory("oepm-catalog-remotes").toFile()
-        val calculatorRepoV1 = packageRepo(remotesRoot, "calculator-package-v1", "example.calculator", "1.0.0")
-        val catalog = catalogRepo(remotesRoot, mapOf("example.calculator" to (calculatorRepoV1 to "1.0.0")))
-        // Simulate a second version file landing in the same package folder
-        // (not yet reachable via catalogRepo() since v1 only ever writes one).
-        File(catalog, "packages/example.calculator/2.0.0.json").writeText(
-            """{ "repoUrl": "${calculatorRepoV1.absolutePath.replace("\\", "\\\\")}", "version": "2.0.0", "ref": "v1.0.0" }""",
+    /** One repo, tagged at each of the given versions in sequence (v1.0.0 first, then v1.5.0, etc.). */
+    private fun packageRepoWithVersions(root: File, folderName: String, packageName: String, versions: List<String>): File {
+        val dir = File(root, folderName)
+        initRepo(dir)
+        for (version in versions) {
+            File(dir, "openedge-project.json").writeText(
+                """
+                {
+                  "name": "$folderName",
+                  "version": "$version",
+                  "package_name": "$packageName",
+                  "dependencies": {},
+                  "buildPath": [{ "type": "source", "path": "src" }]
+                }
+                """.trimIndent(),
+            )
+            File(dir, "src").mkdirs()
+            File(dir, "src/marker.i").writeText("/* $packageName source marker v$version */")
+            commitAll(dir, "version $version")
+            git(dir, "tag", "v$version")
+        }
+        return dir
+    }
+
+    /** Writes (or overwrites) one catalog reference file, without touching any others already there. */
+    private fun addReference(catalog: File, localName: String, version: String, repoDir: File, ref: String = "v$version") {
+        File(catalog, "packages/$localName").mkdirs()
+        File(catalog, "packages/$localName/$version.json").writeText(
+            """
+            { "repoUrl": "${repoDir.absolutePath.replace("\\", "\\\\")}", "version": "$version", "ref": "$ref" }
+            """.trimIndent(),
         )
         git(catalog, "add", "-A")
-        git(catalog, "commit", "-m", "add a second version file")
+        git(catalog, "commit", "-m", "add version $version")
+    }
+
+    @Test
+    fun `findAny picks the highest available version when a package's catalog folder has more than one`() {
+        val remotesRoot = createTempDirectory("oepm-catalog-remotes").toFile()
+        val repo = packageRepoWithVersions(remotesRoot, "calculator-package", "example.calculator", listOf("1.0.0", "2.0.0"))
+        val catalog = catalogRepo(remotesRoot, emptyMap())
+        addReference(catalog, "example.calculator", "1.0.0", repo)
+        addReference(catalog, "example.calculator", "2.0.0", repo)
 
         val cacheDir = createTempDirectory("oepm-catalog-cache").toFile()
-        val registry = registry(catalog, cacheDir)
+        val resolved = registry(catalog, cacheDir).findAny("example.calculator")
 
-        val exception = assertFailsWith<IllegalStateException> { registry.findAny("example.calculator") }
+        assertEquals("2.0.0", resolved?.version)
+    }
+
+    @Test
+    fun `resolve picks the highest version satisfying the range, not necessarily the highest overall`() {
+        val remotesRoot = createTempDirectory("oepm-catalog-remotes").toFile()
+        val repo =
+            packageRepoWithVersions(remotesRoot, "calculator-package", "example.calculator", listOf("1.0.0", "1.5.0", "2.0.0"))
+        val catalog = catalogRepo(remotesRoot, emptyMap())
+        addReference(catalog, "example.calculator", "1.0.0", repo)
+        addReference(catalog, "example.calculator", "1.5.0", repo)
+        addReference(catalog, "example.calculator", "2.0.0", repo)
+
+        val cacheDir = createTempDirectory("oepm-catalog-cache").toFile()
+        val resolved = registry(catalog, cacheDir).resolve("example.calculator", "^1.0.0")
+
+        assertEquals("1.5.0", resolved.version)
+    }
+
+    @Test
+    fun `resolve throws a clear error naming the available versions when none satisfy the range`() {
+        val remotesRoot = createTempDirectory("oepm-catalog-remotes").toFile()
+        val repo = packageRepoWithVersions(remotesRoot, "calculator-package", "example.calculator", listOf("1.0.0", "2.0.0"))
+        val catalog = catalogRepo(remotesRoot, emptyMap())
+        addReference(catalog, "example.calculator", "1.0.0", repo)
+        addReference(catalog, "example.calculator", "2.0.0", repo)
+
+        val cacheDir = createTempDirectory("oepm-catalog-cache").toFile()
+        val exception =
+            assertFailsWith<IllegalStateException> { registry(catalog, cacheDir).resolve("example.calculator", "^3.0.0") }
 
         assertTrue(exception.message!!.contains("example.calculator"))
-        assertTrue(exception.message!!.contains("1.0.0.json"))
-        assertTrue(exception.message!!.contains("2.0.0.json"))
+        assertTrue(exception.message!!.contains("1.0.0"))
+        assertTrue(exception.message!!.contains("2.0.0"))
+        assertTrue(exception.message!!.contains("^3.0.0"))
+    }
+
+    @Test
+    fun `a version only fetches its own worktree, not every candidate version`() {
+        val remotesRoot = createTempDirectory("oepm-catalog-remotes").toFile()
+        val repo = packageRepoWithVersions(remotesRoot, "calculator-package", "example.calculator", listOf("1.0.0", "1.5.0", "2.0.0"))
+        val catalog = catalogRepo(remotesRoot, emptyMap())
+        addReference(catalog, "example.calculator", "1.0.0", repo)
+        addReference(catalog, "example.calculator", "1.5.0", repo)
+        addReference(catalog, "example.calculator", "2.0.0", repo)
+
+        val cacheDir = createTempDirectory("oepm-catalog-cache").toFile()
+        registry(catalog, cacheDir).resolve("example.calculator", "^1.0.0")
+
+        assertTrue(File(cacheDir, "example.calculator/v1.5.0/.git").exists(), "Expected the selected version to be fetched")
+        assertFalse(File(cacheDir, "example.calculator/v1.0.0").exists(), "Expected a non-selected version not to be fetched")
+        assertFalse(File(cacheDir, "example.calculator/v2.0.0").exists(), "Expected a non-selected version not to be fetched")
     }
 
     @Test
