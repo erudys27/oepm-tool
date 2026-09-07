@@ -637,4 +637,127 @@ class OepmPluginFunctionalTest {
             "Expected no test-folder entry added to the consumer's buildPath, got: ${buildPathOf(projectDir)}",
         )
     }
+
+    // --- oepmPrune ---
+
+    private fun writeManifest(projectDir: File, dependencyNames: List<String>) {
+        val manifestFile = projectDir.resolve("openedge-project.json")
+        val dependencies = JSONObject()
+        dependencyNames.forEach { dependencies.put(it, "^1.0.0") }
+
+        // Only touches "dependencies" - a fresh manifest the first time
+        // (file doesn't exist yet), an in-place edit after oepmInstall has
+        // already run once (must preserve the buildPath entries it wrote).
+        val json =
+            if (manifestFile.exists()) {
+                JSONObject(manifestFile.readText())
+            } else {
+                JSONObject()
+                    .put("name", "consumer-app-fixture")
+                    .put("version", "1.0.0")
+                    .put("package_name", "example.consumer")
+                    .put("buildPath", JSONArray().put(JSONObject().put("type", "source").put("path", "src")))
+            }
+        json.put("dependencies", dependencies)
+        manifestFile.writeText(json.toString(2))
+    }
+
+    @Test
+    fun `oepmPrune removes a no-longer-declared dependency's oepm_packages folder and buildPath entry, leaving others alone`() {
+        val registryDir = createTempDirectory("oepm-functional-test-prune-registry").toFile()
+        for (name in listOf("alpha", "beta")) {
+            val packageDir = File(registryDir, "example.$name")
+            packageDir.resolve("src/example/$name").mkdirs()
+            packageDir.resolve("src/example/$name/Thing.cls").writeText("class example.$name.Thing:\nend class.\n")
+            packageDir.resolve("openedge-project.json").writeText(
+                JSONObject()
+                    .put("name", "$name-package")
+                    .put("version", "1.0.0")
+                    .put("package_name", "example.$name")
+                    .put("dependencies", JSONObject())
+                    .put("buildPath", JSONArray().put(JSONObject().put("type", "source").put("path", "src")))
+                    .toString(2),
+            )
+        }
+
+        val projectDir = createTempDirectory("oepm-functional-test-prune-project").toFile()
+        val registryPath = registryDir.absolutePath.replace("\\", "/")
+        projectDir.resolve("settings.gradle.kts").writeText("""rootProject.name = "prune-fixture"""")
+        projectDir.resolve("build.gradle.kts").writeText(
+            """
+            plugins {
+                id("io.github.erudys27.oepm")
+            }
+
+            oepm {
+                registryRoot.set(file("$registryPath"))
+            }
+            """.trimIndent(),
+        )
+        writeManifest(projectDir, listOf("example.alpha", "example.beta"))
+
+        run(projectDir, "oepmInstall")
+        assertTrue(File(projectDir, "oepm_packages/example.alpha/src").exists())
+        assertTrue(File(projectDir, "oepm_packages/example.beta/src").exists())
+
+        // beta is no longer declared - a real edit, same as a user removing a dependency by hand.
+        writeManifest(projectDir, listOf("example.alpha"))
+
+        val dryRunResult = run(projectDir, "oepmPrune", "-PoepmDryRun")
+        assertTrue(
+            dryRunResult.output.contains("would remove") && dryRunResult.output.contains("example.beta"),
+            "Expected a dry-run report naming example.beta, got:\n${dryRunResult.output}",
+        )
+        assertTrue(
+            File(projectDir, "oepm_packages/example.beta/src").exists(),
+            "Expected dry-run to leave oepm_packages/example.beta untouched",
+        )
+        assertTrue(
+            "oepm_packages/example.beta/src" in buildPathOf(projectDir),
+            "Expected dry-run to leave the buildPath entry untouched",
+        )
+
+        val pruneResult = run(projectDir, "oepmPrune")
+        assertTrue(
+            pruneResult.output.contains("removed") && pruneResult.output.contains("example.beta"),
+            "Expected a real-run report naming example.beta, got:\n${pruneResult.output}",
+        )
+        assertTrue(
+            !File(projectDir, "oepm_packages/example.beta").exists(),
+            "Expected example.beta's whole folder to be removed from oepm_packages",
+        )
+        assertTrue(
+            "oepm_packages/example.beta/src" !in buildPathOf(projectDir),
+            "Expected example.beta's buildPath entry to be removed",
+        )
+        assertTrue(
+            File(projectDir, "oepm_packages/example.alpha/src/example/alpha/Thing.cls").exists(),
+            "Expected example.alpha (still declared) to be left alone",
+        )
+        assertTrue(
+            "oepm_packages/example.alpha/src" in buildPathOf(projectDir),
+            "Expected example.alpha's buildPath entry to be left alone",
+        )
+    }
+
+    @Test
+    fun `oepmPrune reports nothing to remove when everything installed is still declared`() {
+        val registryDir = buildRegistry()
+        val manifest =
+            JSONObject()
+                .put("name", "consumer-app-fixture")
+                .put("version", "1.0.0")
+                .put("package_name", "example.consumer")
+                .put("dependencies", JSONObject().put("example.calculator", "^1.0.0"))
+                .put("buildPath", JSONArray().put(JSONObject().put("type", "source").put("path", "src")))
+        val projectDir = buildProject(registryDir, manifest)
+
+        run(projectDir, "oepmInstall")
+        val pruneResult = run(projectDir, "oepmPrune")
+
+        assertTrue(
+            pruneResult.output.contains("nothing to remove"),
+            "Expected nothing to remove, got:\n${pruneResult.output}",
+        )
+    }
 }

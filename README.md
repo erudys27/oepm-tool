@@ -63,15 +63,19 @@ registries — not just a local folder:
   A dependency's own test entries are never read at all when it's
   fetched, so they can't leak into a consumer's `oepm_packages/` or
   PROPATH either way.
+- **`oepm prune`**: removes `oepm_packages/` entries (and their `buildPath`
+  references) that are no longer part of the resolved dependency graph —
+  e.g. a dependency removed from `dependencies` by hand. `--dry-run`
+  previews without changing anything. Re-resolves the full graph first
+  (same as `oepmInstall`) so it knows exactly what a fresh install would
+  produce right now, including transitive dependencies.
 
 See `docs/decisions/` for what's been decided and why, and the open
 questions at the bottom of this file for what hasn't. Still missing: real
 Gradle/Ivy-based resolution (a hand-written version matcher is used
 instead, see "Known deviation from ADR-0001" below), multi-version
 registry support (the catalog layout is prepped for it, but there's no
-version-selection logic yet), include-collision linting, and an
-`npm prune`-equivalent (an entry that stops being part of the resolved
-graph is never automatically removed from `oepm_packages/`/`buildPath`).
+version-selection logic yet), and include-collision linting.
 
 ## Repo layout
 
@@ -112,10 +116,11 @@ scaffold/templates/    templates scaffoldProject renders into a new/existing pro
                        openedge-project.json)
 oepm / oepm.bat        per-project thin CLI wrapper, scaffolded into each project —
                        translates `oepm install <package>` / `oepm propath` /
-                       `oepm registry add` into the equivalent ./gradlew calls;
-                       auto-detects the .oepm/ vs. root-level layout; finds its
-                       target project by its own file location, so it works
-                       with zero global setup (CI, a fresh machine, etc.)
+                       `oepm registry add` / `oepm prune` into the equivalent
+                       ./gradlew calls; auto-detects the .oepm/ vs. root-level
+                       layout; finds its target project by its own file
+                       location, so it works with zero global setup (CI, a
+                       fresh machine, etc.)
 cli/oepm / cli/oepm.bat  the same CLI, but installed once (added to PATH) and
                        finds its target project by walking upward from your
                        current directory instead — see "Per-machine setup"

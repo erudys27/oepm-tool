@@ -48,6 +48,7 @@ oepm install <package>[:<versionSpec>] add + resolve a dependency in one step
 oepm propath                           print the generated PROPATH
 oepm propath --tests                   ...also including buildPath's "test" entries
 oepm registry add [<prefix> <url>]     add a registry (interactive if omitted)
+oepm prune [--dry-run]                 remove oepm_packages/ entries no longer declared
 ```
 
 `oepm` here means whichever CLI applies — the per-project `./oepm`/`.\oepm.bat`

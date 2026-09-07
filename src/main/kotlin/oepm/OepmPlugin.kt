@@ -189,6 +189,52 @@ class OepmPlugin : Plugin<Project> {
             }
         }
 
+        project.tasks.register("oepmPrune") { task ->
+            task.group = "oepm"
+            task.description =
+                "Removes oepm_packages/ entries (and their buildPath references) that are no longer " +
+                "part of the resolved dependency graph. Pass -PoepmDryRun to preview without changing anything."
+            task.doLast {
+                val projectRoot = extension.projectRoot.get().asFile
+                val manifestFile = projectRoot.resolve("openedge-project.json")
+                val registry = buildRegistry(extension)
+                val manifest = ManifestReader.read(manifestFile)
+
+                // Same resolution oepmInstall does - prune has to know
+                // exactly what a fresh install would produce right now
+                // (including transitive deps) to tell "stale" from
+                // "still needed" apart.
+                val directSourceCacheDir = extension.cacheDir.get().asFile.resolve("_direct")
+                val resolvedPackages = DependencyResolver.resolveAll(manifest.dependencies, registry, directSourceCacheDir)
+                val expectedPaths =
+                    resolvedPackages.map { (packageName, resolvedPackage) ->
+                        "oepm_packages/${resolvedPackage.installSubpath ?: packageName}/src"
+                    }.toSet()
+
+                val dryRun = project.hasProperty("oepmDryRun")
+
+                val staleDirs = findStaleOepmPackagesDirs(projectRoot, expectedPaths)
+                if (!dryRun) {
+                    val oepmPackagesDir = projectRoot.resolve("oepm_packages")
+                    staleDirs.forEach { (leafDir, _) ->
+                        leafDir.deleteRecursively()
+                        removeNowEmptyAncestors(leafDir.parentFile, oepmPackagesDir)
+                    }
+                }
+                val staleBuildPathPaths = BuildPathUpdater.pruneStaleOepmPackagesEntries(manifestFile, expectedPaths, dryRun)
+
+                val allStalePaths = (staleDirs.map { it.second } + staleBuildPathPaths).toSortedSet()
+                if (allStalePaths.isEmpty()) {
+                    project.logger.lifecycle("oepm prune: nothing to remove")
+                } else {
+                    val verb = if (dryRun) "would remove" else "removed"
+                    allStalePaths.forEach { project.logger.lifecycle("oepm prune: $verb $it") }
+                    val suffix = if (dryRun) " (dry run - nothing changed)" else ""
+                    project.logger.lifecycle("oepm prune: $verb ${allStalePaths.size} entr${if (allStalePaths.size == 1) "y" else "ies"}$suffix")
+                }
+            }
+        }
+
         project.tasks.register("oepmRegistryAdd") { task ->
             task.group = "oepm"
             task.description =
@@ -266,6 +312,44 @@ private fun buildRegistry(extension: OepmExtension): Registry {
     }
 
     return PrefixRoutingRegistry(delegatesByPrefix)
+}
+
+/**
+ * Finds every "src" directory under oepm_packages/ - that's always
+ * exactly where a resolved package's source lands (see oepmInstall) -
+ * and returns (that package's own installed folder, its oepm_packages-
+ * relative "src" path) for each one NOT in expectedPaths. The parent of
+ * "src", not "src" itself, is what a caller should delete - it's the
+ * package's whole installed folder, and nothing else oepm creates lives
+ * alongside "src" under it.
+ */
+private fun findStaleOepmPackagesDirs(projectRoot: File, expectedPaths: Set<String>): List<Pair<File, String>> {
+    val oepmPackagesDir = projectRoot.resolve("oepm_packages")
+    if (!oepmPackagesDir.isDirectory) return emptyList()
+
+    return oepmPackagesDir
+        .walkTopDown()
+        .filter { it.isDirectory && it.name == "src" }
+        .mapNotNull { srcDir ->
+            val relativePath = srcDir.relativeTo(projectRoot).invariantSeparatorsPath
+            if (relativePath in expectedPaths) null else srcDir.parentFile to relativePath
+        }.toList()
+}
+
+/**
+ * After deleting a stale package's own folder, its now-empty parent
+ * (e.g. oepm_packages/ba/ once every "ba"-routed package under it is
+ * gone) would otherwise sit around forever - clean those up too, walking
+ * upward but never past oepm_packages/ itself, and stopping at the first
+ * ancestor that still has something else in it.
+ */
+private fun removeNowEmptyAncestors(dir: File, stopAt: File) {
+    var current = dir
+    while (current.absolutePath != stopAt.absolutePath && current.isDirectory && current.listFiles().isNullOrEmpty()) {
+        val parent = current.parentFile
+        current.delete()
+        current = parent
+    }
 }
 
 /**
