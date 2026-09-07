@@ -69,13 +69,17 @@ registries — not just a local folder:
   previews without changing anything. Re-resolves the full graph first
   (same as `oepmInstall`) so it knows exactly what a fresh install would
   produce right now, including transitive dependencies.
+- **Multi-version registries**: a package's catalog folder can hold any
+  number of version files. `oepmInstall` picks the highest version that
+  satisfies the declared caret range; publishing a new version means
+  adding a new reference file, not replacing the old one, so consumers
+  pinned to older-but-still-compatible ranges keep resolving.
 
 See `docs/decisions/` for what's been decided and why, and the open
 questions at the bottom of this file for what hasn't. Still missing: real
 Gradle/Ivy-based resolution (a hand-written version matcher is used
-instead, see "Known deviation from ADR-0001" below), multi-version
-registry support (the catalog layout is prepped for it, but there's no
-version-selection logic yet), and include-collision linting.
+instead, see "Known deviation from ADR-0001" below), and include-collision
+linting.
 
 ## Repo layout
 

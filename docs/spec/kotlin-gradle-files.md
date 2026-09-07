@@ -161,8 +161,12 @@ with `ResolvedPackage` — name, version, source/project folders, and an
 - **`CatalogRegistry.kt`** — a remote registry backed by a small git
   "catalog" repo holding no package content itself, just one reference
   file per package version pointing at that package's own dedicated repo
-  + tag. Fetches through `GitPackageFetcher` (below); sets
-  `installSubpath` to `"<prefix>/<localName>"`.
+  + tag. A package's folder can hold any number of version files —
+  `resolve` picks the highest one satisfying the requested caret range,
+  `findAny` picks the highest available overall; only the version
+  actually picked ever gets fetched, never every candidate. Fetches
+  through `GitPackageFetcher` (below); sets `installSubpath` to
+  `"<prefix>/<localName>"`.
 - **`PrefixRoutingRegistry.kt`** — routes a package name to whichever
   configured registry's prefix it matches (longest prefix wins); no
   configured prefix matching is a loud error, not a silent fallback.
