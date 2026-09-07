@@ -61,4 +61,51 @@ class BuildPathUpdaterTest {
             buildPathOf(file),
         )
     }
+
+    @Test
+    fun `pruneStaleOepmPackagesEntries removes only oepm_packages source entries not in expectedPaths`() {
+        val file =
+            manifestWithBuildPath(
+                "src",
+                "oepm_packages/example.calculator/src",
+                "oepm_packages/example.greeter/src",
+            )
+
+        val removed =
+            BuildPathUpdater.pruneStaleOepmPackagesEntries(file, expectedPaths = setOf("oepm_packages/example.calculator/src"))
+
+        assertEquals(listOf("oepm_packages/example.greeter/src"), removed)
+        assertEquals(listOf("src", "oepm_packages/example.calculator/src"), buildPathOf(file))
+    }
+
+    @Test
+    fun `pruneStaleOepmPackagesEntries never touches entries outside oepm_packages`() {
+        val file = manifestWithBuildPath("src", "some/other/entry")
+
+        val removed = BuildPathUpdater.pruneStaleOepmPackagesEntries(file, expectedPaths = emptySet())
+
+        assertEquals(emptyList(), removed)
+        assertEquals(listOf("src", "some/other/entry"), buildPathOf(file))
+    }
+
+    @Test
+    fun `pruneStaleOepmPackagesEntries with dryRun reports what would be removed but changes nothing`() {
+        val file = manifestWithBuildPath("src", "oepm_packages/example.calculator/src")
+
+        val removed = BuildPathUpdater.pruneStaleOepmPackagesEntries(file, expectedPaths = emptySet(), dryRun = true)
+
+        assertEquals(listOf("oepm_packages/example.calculator/src"), removed)
+        assertEquals(listOf("src", "oepm_packages/example.calculator/src"), buildPathOf(file))
+    }
+
+    @Test
+    fun `pruneStaleOepmPackagesEntries returns empty and leaves buildPath untouched when nothing is stale`() {
+        val file = manifestWithBuildPath("src", "oepm_packages/example.calculator/src")
+
+        val removed =
+            BuildPathUpdater.pruneStaleOepmPackagesEntries(file, expectedPaths = setOf("oepm_packages/example.calculator/src"))
+
+        assertEquals(emptyList(), removed)
+        assertEquals(listOf("src", "oepm_packages/example.calculator/src"), buildPathOf(file))
+    }
 }

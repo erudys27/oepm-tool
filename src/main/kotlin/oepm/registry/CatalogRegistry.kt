@@ -28,10 +28,18 @@ import java.io.File
  * packageName — that's the public identity used everywhere outside this
  * class (oepm.lock, oepm_packages/, dependency map keys).
  *
- * The folder-per-package layout is prep for future multi-version registry
- * support — v1 itself still only supports exactly one version per
- * package, same as LocalDirectoryRegistry: more than one version file
- * under a package's folder is a loud error, not a selection.
+ * Multi-version support (decided 2026-09-04): a package's catalog folder
+ * can hold any number of version files. resolve(versionSpec) picks the
+ * highest version whose catalog-declared "version" field satisfies the
+ * caret range; findAny picks the highest version available, unfiltered.
+ * Selection reads each candidate's cheap, local catalog metadata only -
+ * it never fetches a candidate just to compare versions, only the one
+ * actually picked. The catalog's declared "version" is used purely to
+ * choose *which* reference to fetch; the ResolvedPackage's own version
+ * still comes from that package's own fetched openedge-project.json,
+ * exactly as before - the catalog's claim and the real repo's own
+ * declared version are expected to agree, but nothing here enforces that
+ * beyond what IntegrityChecker already catches for tag-hijack scenarios.
  *
  * Cache layout under cacheDir (one CatalogRegistry per configured
  * registry, so cacheDir is already scoped to this registry's name):
@@ -51,62 +59,58 @@ class CatalogRegistry(
     private val catalogDir = File(cacheDir, "_catalog")
 
     override fun resolve(packageName: String, versionSpec: String): ResolvedPackage {
-        val found =
-            findAny(packageName)
-                ?: throw IllegalStateException(
-                    "No package named \"$packageName\" found in registry \"$registryName\" catalog ($catalogUrl)",
-                )
+        val localName = localNameOf(packageName)
+        ensureCatalogCloned()
 
-        val version = SemVer.parse(found.version)
-        if (!CaretRange.satisfies(versionSpec, version)) {
-            throw IllegalStateException(
-                "Found \"$packageName\" in registry \"$registryName\", but its version ${found.version} " +
-                    "does not satisfy $versionSpec",
-            )
+        val references = findAllReferences(localName)
+        require(references.isNotEmpty()) {
+            "No package named \"$packageName\" found in registry \"$registryName\" catalog ($catalogUrl)"
         }
 
-        return found
+        val best =
+            references
+                .filter { CaretRange.satisfies(versionSpec, SemVer.parse(it.version)) }
+                .maxByOrNull { SemVer.parse(it.version) }
+                ?: throw IllegalStateException(
+                    "Found \"$packageName\" in registry \"$registryName\", but none of its available " +
+                        "versions (${references.joinToString(", ") { it.version }}) satisfy $versionSpec",
+                )
+
+        return fetchAndBuild(packageName, localName, best)
     }
 
     override fun findAny(packageName: String): ResolvedPackage? {
+        val localName = localNameOf(packageName)
+        ensureCatalogCloned()
+
+        val references = findAllReferences(localName)
+        val best = references.maxByOrNull { SemVer.parse(it.version) } ?: return null
+
+        return fetchAndBuild(packageName, localName, best)
+    }
+
+    private fun localNameOf(packageName: String): String {
         require(packageName.startsWith(prefix)) {
             "\"$packageName\" doesn't start with registry \"$registryName\"'s configured prefix \"$prefix\" " +
                 "— this registry should only ever be asked about names PrefixRoutingRegistry already routed to it"
         }
-        val localName = packageName.removePrefix(prefix)
+        return packageName.removePrefix(prefix)
+    }
 
-        ensureCatalogCloned()
-
-        val referenceFile = findReferenceFile(localName, packageName) ?: return null
-        val reference = readReference(referenceFile, packageName)
+    private fun fetchAndBuild(packageName: String, localName: String, reference: PackageReference): ResolvedPackage {
         val packageDir = File(cacheDir, localName)
-
         val fetched = GitPackageFetcher.fetch(packageName, reference.repoUrl, reference.ref, packageDir)
         val installSubpath = prefix.trimEnd('.').takeIf { it.isNotEmpty() }?.let { "$it/$localName" }
         return fetched.copy(installSubpath = installSubpath)
     }
 
-    /**
-     * v1 has no version selection: a package folder with more than one
-     * version file is a loud error, not a pick. See class doc. Looks up by
-     * localName (prefix stripped); error messages still name the full,
-     * public packageName so a failure is recognizable from the outside.
-     */
-    private fun findReferenceFile(localName: String, packageName: String): File? {
+    /** Every version reference file under a package's catalog folder, parsed. Empty if the package isn't in this catalog at all. */
+    private fun findAllReferences(localName: String): List<PackageReference> {
         val packageDir = File(catalogDir, "packages/$localName")
-        if (!packageDir.isDirectory) return null
+        if (!packageDir.isDirectory) return emptyList()
 
         val versionFiles = packageDir.listFiles { file -> file.isFile && file.extension == "json" }.orEmpty()
-        return when (versionFiles.size) {
-            0 -> null
-            1 -> versionFiles.single()
-            else ->
-                throw IllegalStateException(
-                    "Registry \"$registryName\" catalog has multiple versions of \"$packageName\" " +
-                        "(${versionFiles.joinToString(", ") { it.name }}), but v1 does not support " +
-                        "selecting among multiple versions yet.",
-                )
-        }
+        return versionFiles.map { readReference(it, localName) }
     }
 
     private fun ensureCatalogCloned() {
@@ -120,23 +124,26 @@ class CatalogRegistry(
         GitCli.run(null, "clone", "--branch", catalogRef, catalogUrl, catalogDir.path)
     }
 
-    private data class PackageReference(val repoUrl: String, val ref: String)
+    private data class PackageReference(val repoUrl: String, val version: String, val ref: String)
 
-    private fun readReference(file: File, packageName: String): PackageReference {
+    private fun readReference(file: File, localName: String): PackageReference {
         val json =
             try {
                 JSONObject(file.readText())
             } catch (e: JSONException) {
-                throw IllegalStateException("Malformed catalog reference file for \"$packageName\": ${file.path}", e)
+                throw IllegalStateException("Malformed catalog reference file for \"$localName\": ${file.path}", e)
             }
 
         val repoUrl =
             json.optString("repoUrl").takeIf { it.isNotBlank() }
                 ?: throw IllegalStateException("Catalog reference file ${file.path} is missing \"repoUrl\"")
+        val version =
+            json.optString("version").takeIf { it.isNotBlank() }
+                ?: throw IllegalStateException("Catalog reference file ${file.path} is missing \"version\"")
         val ref =
             json.optString("ref").takeIf { it.isNotBlank() }
                 ?: throw IllegalStateException("Catalog reference file ${file.path} is missing \"ref\"")
 
-        return PackageReference(repoUrl, ref)
+        return PackageReference(repoUrl, version, ref)
     }
 }
