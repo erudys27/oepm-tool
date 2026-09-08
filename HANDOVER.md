@@ -25,6 +25,22 @@ GitHub repos (all under `github.com/erudys27/`):
 | **`registry-ba`**, **`registry-cw`** | Catalog registries — small repos holding only reference files (`packages/<name>/<version>.json`) that point at a package's own dedicated repo + tag. No package content lives in a registry itself. |
 | **`calculator`**, **`logger`**, **`greeter`** | Individual packages, each its own repo, each tagged per version. `calculator`/`logger` are referenced from the catalogs above; `greeter` is a direct-source dependency (no catalog entry at all). |
 
+## Repo layout (this repo, `oepm-tool`)
+
+```
+docs/                             decisions/ (ADRs), spec/ (design docs), research/
+src/main/kotlin/oepm/             the plugin - see docs/spec/kotlin-gradle-files.md
+src/test/kotlin/oepm/             unit tests
+src/functionalTest/kotlin/oepm/   TestKit tests - run the real plugin
+scaffold/templates/               templates scaffoldProject renders
+oepm / oepm.bat                   per-project CLI, scaffolded into each project
+cli/                              global CLI + its one-time install script
+oepm-init / oepm-init.bat         interactive project scaffolding wrapper
+build.gradle.kts                  plugin build config + the scaffoldProject task
+```
+
+The Gradle wrapper (`gradlew`/`gradlew.bat`) is checked in.
+
 ## One-time setup
 
 1. Clone `oepm-tool`.
@@ -38,6 +54,18 @@ GitHub repos (all under `github.com/erudys27/`):
    re-run. Once it's run, bare `oepm-init` also works from any directory
    (a thin forwarder in `cli/`, not a copy — see README's "Per-machine
    setup" for why it's not simply oepm-tool's whole root added to PATH).
+
+To actually publish a package or stand up a new registry (not just
+consume one), see README.md's "Creating a registry" and "Publishing a
+package" sections — the repo-structure/tagging conventions and the
+manual "add a version file, don't replace it" publish step live there.
+
+## Workflow
+
+`main` ← `develop` ← `feature/<name>` branches, one feature per branch,
+merged into `develop` via PR, then `develop` merged into `main` in
+batches once a few features have landed. No CI configured yet - `./gradlew
+check` before every merge is on you.
 
 ## Commands you'll actually type
 
@@ -60,12 +88,10 @@ applies — it matters, don't assume they're interchangeable by accident.
 ## What's built vs. decided-but-not-built
 
 README.md's "Status" section is the authoritative, up-to-date list of
-what actually works (multi-registry resolution, catalogs, direct-source
-deps, integrity verification, PROPATH namespace-collision detection,
-`oepm_packages/` nested by registry prefix, the `"test"` buildPath type,
-the global CLI). A few things were explicitly discussed and decided
-*against* building, for now — worth knowing so they don't get
-re-litigated from scratch or assumed to be oversights:
+what actually works - check there rather than here, so this file doesn't
+need updating every time a feature ships. A few things were explicitly
+discussed and decided *against* building, for now - worth knowing so they
+don't get re-litigated from scratch or assumed to be oversights:
 
 - **Package namespace uniqueness is left as author convention, not
   enforced by the tool.** `package_name` is free text; nothing stops two
