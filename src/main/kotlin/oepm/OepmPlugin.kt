@@ -26,12 +26,7 @@ import org.json.JSONObject
 import java.io.File
 import javax.inject.Inject
 
-/**
- * One remote, catalog-backed registry configuration entry — see
- * oepm.registry.CatalogRegistry. "name" is just the DSL entry's own label
- * (e.g. "ba"); "prefix" is the actual routing key matched against
- * package_name (e.g. "ba.").
- */
+/** One registries{} entry. "name" is just its DSL label; "prefix" is the actual routing key (e.g. "ba."). */
 abstract class GitRegistrySpec
     @Inject
     constructor(private val entryName: String) : Named {
@@ -45,13 +40,8 @@ abstract class GitRegistrySpec
 abstract class OepmExtension
     @Inject
     constructor(objects: ObjectFactory) {
-        // Where the actual ABL project (openedge-project.json, src/,
-        // oepm-registries.properties, oepm.lock, oepm_packages/) lives.
-        // Defaults to wherever build.gradle.kts itself is - identical to
-        // today's behavior for any project that doesn't set this. Only
-        // needs setting explicitly when Gradle's own project directory
-        // isn't the ABL project root - e.g. a scaffolded project keeping
-        // Gradle's own files in a .oepm/ subfolder sets this to file("..").
+        // Where the ABL project lives. Defaults to build.gradle.kts's own
+        // directory; set to file("..") when Gradle's files sit in .oepm/.
         abstract val projectRoot: DirectoryProperty
         abstract val registryRoot: DirectoryProperty
         abstract val cacheDir: DirectoryProperty
@@ -89,13 +79,7 @@ class OepmPlugin : Plugin<Project> {
                 val registry = buildRegistry(extension)
                 val manifest = ManifestReader.read(manifestFile)
 
-                // -PoepmAdd is only resolved to a (packageName, versionSpec)
-                // pair here — nothing is written to the manifest yet. It's
-                // merged into the dependency set purely in memory so
-                // DependencyResolver sees it, keeping the whole operation
-                // all-or-nothing: if resolution fails (e.g. a version
-                // conflict), the manifest's dependencies are never touched,
-                // same as oepm_packages/oepm.lock/buildPath below.
+                // Held in memory, not written yet - keeps a failed resolve from touching the manifest at all.
                 val pendingAdd: Pair<String, String>? =
                     if (project.hasProperty("oepmAdd")) {
                         resolveAddSpec(project.property("oepmAdd") as String, registry)
@@ -110,22 +94,11 @@ class OepmPlugin : Plugin<Project> {
                         manifest.dependencies
                     }
 
-                // Resolves the full dependency graph, not just direct
-                // dependencies — a resolved package's own declared
-                // dependencies are resolved too, recursively (see
-                // oepm.resolver.DependencyResolver). directSourceCacheDir
-                // is only used for direct-source dependencies (inline
-                // repoUrl/ref, no registry involved) - auto-created on
-                // demand, same convention as the rest of the cache.
+                // Resolves the full graph, including transitive deps - see DependencyResolver.
                 val directSourceCacheDir = extension.cacheDir.get().asFile.resolve("_direct")
                 val resolvedPackages = DependencyResolver.resolveAll(dependenciesToResolve, registry, directSourceCacheDir)
 
-                // Verify every package against oepm.lock's existing entries
-                // *before* touching oepm_packages/ - if a registry served
-                // different content for an already-locked version (e.g. a
-                // force-moved git tag), fail loudly before anything on
-                // disk changes, not after. Hashed once here and reused
-                // below when writing the new lockfile.
+                // Catches a moved/hijacked tag before touching oepm_packages/, not after.
                 val existingLock = LockfileReader.read(projectRoot.resolve("oepm.lock"))
                 val integrities =
                     resolvedPackages.mapValues { (packageName, resolvedPackage) ->
@@ -200,10 +173,7 @@ class OepmPlugin : Plugin<Project> {
                 val registry = buildRegistry(extension)
                 val manifest = ManifestReader.read(manifestFile)
 
-                // Same resolution oepmInstall does - prune has to know
-                // exactly what a fresh install would produce right now
-                // (including transitive deps) to tell "stale" from
-                // "still needed" apart.
+                // Same resolution oepmInstall does, to know what "stale" actually means right now.
                 val directSourceCacheDir = extension.cacheDir.get().asFile.resolve("_direct")
                 val resolvedPackages = DependencyResolver.resolveAll(manifest.dependencies, registry, directSourceCacheDir)
                 val expectedPaths =
@@ -264,18 +234,10 @@ class OepmPlugin : Plugin<Project> {
 }
 
 /**
- * Registries come from two mergeable sources: the registries{} DSL block
- * (hand-authored, in build.gradle.kts) and oepm-registries.properties
- * (see RegistriesPropertiesFile - a second source specifically because
- * it's safe to programmatically append to, unlike an arbitrary existing
- * build.gradle.kts; oepmRegistryAdd and scaffoldProject both write to it).
- * A prefix declared in both sources - or twice in the same source - is a
- * duplicate-prefix error, not a silent pick.
- *
- * If neither source has any entries, behaves exactly as before
- * (LocalDirectoryRegistry against registryRoot) for backward compatibility.
- * registryRoot is never silently merged in alongside real registries, to
- * avoid an ambiguous "no prefix matched, fall back to local?" behavior.
+ * Merges registries{} (build.gradle.kts) with oepm-registries.properties
+ * (the programmatically-appendable source - see RegistriesPropertiesFile).
+ * A prefix declared twice, in either source, is an error, not a pick.
+ * Falls back to LocalDirectoryRegistry only if both sources are empty.
  */
 private fun buildRegistry(extension: OepmExtension): Registry {
     val fileEntries = RegistriesPropertiesFile.read(extension.projectRoot.get().asFile.resolve("oepm-registries.properties"))
@@ -314,15 +276,7 @@ private fun buildRegistry(extension: OepmExtension): Registry {
     return PrefixRoutingRegistry(delegatesByPrefix)
 }
 
-/**
- * Finds every "src" directory under oepm_packages/ - that's always
- * exactly where a resolved package's source lands (see oepmInstall) -
- * and returns (that package's own installed folder, its oepm_packages-
- * relative "src" path) for each one NOT in expectedPaths. The parent of
- * "src", not "src" itself, is what a caller should delete - it's the
- * package's whole installed folder, and nothing else oepm creates lives
- * alongside "src" under it.
- */
+/** Every "src" dir under oepm_packages/ not in expectedPaths, paired with its parent (the whole package folder to delete). */
 private fun findStaleOepmPackagesDirs(projectRoot: File, expectedPaths: Set<String>): List<Pair<File, String>> {
     val oepmPackagesDir = projectRoot.resolve("oepm_packages")
     if (!oepmPackagesDir.isDirectory) return emptyList()
@@ -336,13 +290,7 @@ private fun findStaleOepmPackagesDirs(projectRoot: File, expectedPaths: Set<Stri
         }.toList()
 }
 
-/**
- * After deleting a stale package's own folder, its now-empty parent
- * (e.g. oepm_packages/ba/ once every "ba"-routed package under it is
- * gone) would otherwise sit around forever - clean those up too, walking
- * upward but never past oepm_packages/ itself, and stopping at the first
- * ancestor that still has something else in it.
- */
+/** Deletes now-empty ancestor dirs (e.g. an emptied-out registry-prefix folder), stopping at stopAt or the first non-empty one. */
 private fun removeNowEmptyAncestors(dir: File, stopAt: File) {
     var current = dir
     while (current.absolutePath != stopAt.absolutePath && current.isDirectory && current.listFiles().isNullOrEmpty()) {
@@ -352,15 +300,7 @@ private fun removeNowEmptyAncestors(dir: File, stopAt: File) {
     }
 }
 
-/**
- * Parses -PoepmAdd=<package_name>[:<versionSpec>] into a (packageName,
- * versionSpec) pair, without writing anything. When no versionSpec is
- * given, the package is looked up in the registry and its actual version
- * is turned into a caret range (npm's `npm install <pkg>` behavior — pick
- * whatever's available, pin it as a caret range). The caller is
- * responsible for persisting this via DependenciesUpdater only once
- * resolution has actually succeeded.
- */
+/** Parses -PoepmAdd=<name>[:<versionSpec>]; no versionSpec means "whatever's available", pinned as ^version. */
 private fun resolveAddSpec(addSpec: String, registry: Registry): Pair<String, String> {
     val separatorIndex = addSpec.indexOf(':')
     val packageName = if (separatorIndex >= 0) addSpec.substring(0, separatorIndex) else addSpec

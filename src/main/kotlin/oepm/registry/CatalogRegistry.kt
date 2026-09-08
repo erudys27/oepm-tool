@@ -9,45 +9,22 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Registry backed by a small "catalog" git repo that holds no package
- * content itself — only one reference file per package version
- * (packages/<local_name>/<version>.json) pointing at that package's own
- * dedicated repo URL + tag. Fetching a package goes through
- * GitPackageFetcher's bare-clone-plus-worktree cache, no partial-clone
- * machinery involved: the catalog is small enough to clone in full, and
- * each package repo is small and dedicated to one package.
+ * Registry backed by a small "catalog" git repo holding no package
+ * content, only one reference file per package version
+ * (packages/<local_name>/<version>.json) pointing at that package's real
+ * repo + tag. Fetching goes through GitPackageFetcher's cache.
  *
- * "local_name" is packageName (e.g. "ba.calculator") with the registry's
- * own configured prefix stripped (e.g. "calculator"). The routing prefix
- * is purely a lookup key — it's not part of the package's own identity:
- * package_name inside a package's own manifest, and its actual OO ABL
- * namespace, stay whatever that package's own author chose ("calculator",
- * no "ba." baked in). Every package in one catalog shares the same
- * registry, so the prefix is redundant inside that catalog's own folder
- * names. The ResolvedPackage returned still carries the full, prefixed
- * packageName — that's the public identity used everywhere outside this
- * class (oepm.lock, oepm_packages/, dependency map keys).
+ * "local_name" = packageName with the registry's prefix stripped - just a
+ * lookup key, not part of the package's real identity.
  *
- * Multi-version support (decided 2026-09-04): a package's catalog folder
- * can hold any number of version files. resolve(versionSpec) picks the
- * highest version whose catalog-declared "version" field satisfies the
- * caret range; findAny picks the highest version available, unfiltered.
- * Selection reads each candidate's cheap, local catalog metadata only -
- * it never fetches a candidate just to compare versions, only the one
- * actually picked. The catalog's declared "version" is used purely to
- * choose *which* reference to fetch; the ResolvedPackage's own version
- * still comes from that package's own fetched openedge-project.json,
- * exactly as before - the catalog's claim and the real repo's own
- * declared version are expected to agree, but nothing here enforces that
- * beyond what IntegrityChecker already catches for tag-hijack scenarios.
+ * A package's folder can hold multiple version files: resolve(versionSpec)
+ * picks the highest satisfying the caret range, findAny picks the highest
+ * overall - only the one picked ever gets fetched.
  *
- * Cache layout under cacheDir (one CatalogRegistry per configured
- * registry, so cacheDir is already scoped to this registry's name):
+ * Cache layout under cacheDir:
  *   _catalog/                 full clone of the catalog repo
- *   <local_name>/_bare.git/   bare clone of that package's own repo (see
- *                             GitPackageFetcher - no package files, just
- *                             the git history, shared across versions)
- *   <local_name>/<ref>/       worktree checkout of the version actually used
+ *   <local_name>/_bare.git/   bare clone of the package's repo
+ *   <local_name>/<ref>/       worktree checkout of the version used
  */
 class CatalogRegistry(
     private val registryName: String,
@@ -104,7 +81,7 @@ class CatalogRegistry(
         return fetched.copy(installSubpath = installSubpath)
     }
 
-    /** Every version reference file under a package's catalog folder, parsed. Empty if the package isn't in this catalog at all. */
+    /** All parsed version references for a package; empty if it isn't in this catalog. */
     private fun findAllReferences(localName: String): List<PackageReference> {
         val packageDir = File(catalogDir, "packages/$localName")
         if (!packageDir.isDirectory) return emptyList()

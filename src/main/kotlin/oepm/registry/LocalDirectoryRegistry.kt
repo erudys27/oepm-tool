@@ -5,14 +5,7 @@ import oepm.version.CaretRange
 import oepm.version.SemVer
 import java.io.File
 
-/**
- * v1 registry layout: a root directory containing one subfolder per
- * package. Each subfolder is that package's own project root, with its
- * own openedge-project.json declaring package_name + version. Only one
- * version per package is supported — v1 has no multi-version registry
- * support (matches every example built so far; a real future registry
- * with multiple versions per package is out of scope here).
- */
+/** v1 fallback registry: one subfolder per package under root, each its own project with an openedge-project.json. */
 class LocalDirectoryRegistry(private val root: File) : Registry {
     override fun resolve(packageName: String, versionSpec: String): ResolvedPackage {
         val found =

@@ -1,13 +1,6 @@
 package oepm.registry
 
-/**
- * Routes a package_name to exactly one configured registry by longest
- * matching prefix (e.g. "ba." -> the BA registry) — "option A" from the
- * registry-routing decision. No probing multiple registries in order: a
- * package_name with no matching configured prefix is a loud error (a
- * config problem, or a genuinely missing/mistyped package), not a silent
- * fallback.
- */
+/** Routes a package_name to one registry by longest matching prefix. No match is a loud error, not a silent fallback. */
 class PrefixRoutingRegistry(private val delegatesByPrefix: Map<String, Registry>) : Registry {
     private fun route(packageName: String): Registry =
         delegatesByPrefix.entries

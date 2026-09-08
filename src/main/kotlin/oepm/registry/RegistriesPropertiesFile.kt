@@ -11,15 +11,10 @@ data class RegistryFileEntry(
 )
 
 /**
- * A second, CLI-mutable source of registry config, alongside
- * OepmExtension's registries{} DSL (see OepmPlugin.kt) - one property per
- * registry field, namespaced by registry name:
+ * A CLI-appendable alternative to registries{} (OepmPlugin.kt), one
+ * property per field, namespaced by registry name:
  *   ba.prefix=ba.
  *   ba.catalogUrl=https://github.com/erudys27/registry-ba.git
- * The DSL block is hand-authored/richer; this file exists specifically
- * because it's safe to programmatically append to (unlike an arbitrary
- * existing build.gradle.kts) - see oepm.OepmPlugin's oepmRegistryAdd task
- * and oepm-tool's own scaffoldProject task.
  */
 object RegistriesPropertiesFile {
     fun read(file: File): List<RegistryFileEntry> {

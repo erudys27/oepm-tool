@@ -3,14 +3,9 @@ package oepm.manifest
 import java.io.File
 
 /**
- * Infers a package's package_name from its own .cls files' declared OO ABL
- * namespace (e.g. a file containing "class example.closer.Closer:" implies
- * "example.closer"), used to autofill openedge-project.json's package_name
- * when it's missing instead of requiring it to be hand-typed.
- *
- * Every .cls file under the source root is expected to agree on the same
- * namespace, per ADR-0002's one-namespace-per-package expectation. If none
- * are found, or they disagree, this fails loudly rather than guessing.
+ * Infers package_name from .cls files' declared namespace (e.g. "class
+ * example.closer.Closer:" implies "example.closer"). Every file must
+ * agree on one namespace (ADR-0002) - fails loudly instead of guessing.
  */
 object PackageNameInferrer {
     private val classDeclaration = Regex("""(?im)^\s*class\s+([A-Za-z_][\w.]*)\s*:""")

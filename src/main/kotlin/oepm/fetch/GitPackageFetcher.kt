@@ -5,27 +5,12 @@ import oepm.registry.ResolvedPackage
 import java.io.File
 
 /**
- * Fetches one dedicated package repo at a given ref and builds a
- * ResolvedPackage from its own openedge-project.json. Shared by
- * CatalogRegistry (once it's found a repoUrl/ref via its catalog) and
- * oepm.resolver.DependencyResolver's direct-source dependency path (which
- * gets repoUrl/ref straight from a package's own manifest, no registry
- * involved at all) - the fetch mechanism is identical either way, only
- * *how* repoUrl/ref were found differs.
+ * Fetches one package repo at a given ref. Shared by CatalogRegistry and
+ * direct-source deps - only how repoUrl/ref were found differs.
  *
- * Caching strategy: one bare clone per package (no working-tree files at
- * all - just the git object database and refs), plus one `git worktree`
- * checkout per ref actually requested. Fetching a version already present
- * in the bare repo's history is then a local, no-network `worktree add`;
- * only a ref that isn't in the cached history yet costs a `git fetch`, and
- * that fetch pulls incremental history rather than re-cloning from
- * scratch. Multiple versions of the same package share one object store
- * (git dedupes unchanged blobs between tags automatically), instead of
- * each version living in its own fully independent shallow clone.
- *
- * Layout under destDir (the "package folder", one per package):
- *   _bare.git/   bare clone - the actual cache, no package files in it
- *   <ref>/       a worktree checked out at that ref (what callers read)
+ * Caches as one bare clone per package (no working files, just git
+ * history) plus one `git worktree` per ref used - a cached ref is a local
+ * worktree add, a new one just an incremental fetch, never a re-clone.
  */
 object GitPackageFetcher {
     fun fetch(packageName: String, repoUrl: String, ref: String, destDir: File): ResolvedPackage {
@@ -78,9 +63,7 @@ object GitPackageFetcher {
         }
 
         if (worktreeDir.exists()) {
-            // Stale worktree (wrong ref, or left behind by a previous
-            // failed run) - drop it and re-add rather than trying to
-            // reconcile in place.
+            // Stale (wrong ref, or a leftover failed run) - drop and re-add.
             runCatching { GitCli.run(bareRepoDir, "worktree", "remove", "--force", worktreeDir.path) }
             worktreeDir.deleteRecursively()
             GitCli.run(bareRepoDir, "worktree", "prune")

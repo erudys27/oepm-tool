@@ -10,51 +10,24 @@ import oepm.version.SemVer
 import java.io.File
 
 /**
- * Resolves a manifest's dependencies transitively: each resolved package's
- * own openedge-project.json is read in turn, and its dependencies are
- * resolved too, recursively, until the whole graph is flat.
+ * Resolves a manifest's dependencies transitively, reading each resolved
+ * package's own openedge-project.json until the whole graph is flat.
  *
- * Two dependency shapes (see oepm.manifest.DependencySpec):
- * - Registry: routed through the given Registry (PrefixRoutingRegistry,
- *   normally), exactly as before. The declared name must already be
- *   fully-qualified (e.g. "ba.greeter").
- * - DirectSource: fetched directly by repoUrl/ref (GitPackageFetcher), no
- *   registry lookup at all. Always keyed by its own bare declared name -
- *   no inherited prefix, root-level or transitive. This is deliberate:
- *   two packages resolved via *different* registries that both declare a
- *   direct-source dependency on the exact same repoUrl/ref (a shared
- *   utility package) end up requesting the *same* key, so the reuse/
- *   conflict logic below (an exact repoUrl/ref match on an already-
- *   resolved key is fine, a mismatch is a named conflict) naturally
- *   dedupes them instead of every parent minting its own copy under a
- *   different prefixed key. Inheriting a prefix here was tried and
- *   dropped (2026-08-26) - it made that shared-dependency case trip
- *   checkNoNamespaceCollision below as a false positive (same real
- *   package_name, different keys), even though nothing was actually
- *   wrong. Two direct-source deps that really are different things just
- *   happening to share a bare name are still caught correctly - by the
- *   repoUrl/ref mismatch check, which is more precise than a
- *   namespace-based check would be.
+ * DirectSource deps are always keyed by their own bare name, never an
+ * inherited registry prefix - inheriting one was tried and dropped: two
+ * differently-routed parents depending on the same repoUrl/ref would then
+ * get different keys for what's really one shared dependency, falsely
+ * tripping checkNoNamespaceCollision. Bare keys dedupe them correctly via
+ * the repoUrl/ref check below instead.
  *
- * v1 rules (see docs/spec/lockfile-format.md): exactly one resolution per
- * key across the whole graph — a second, incompatible requirement for an
- * already-resolved key is an error, not a silent pick (no npm-style
- * "install both"). This now also covers two DirectSource specs disagreeing
- * on repoUrl/ref, and the same key being declared as both a Registry and a
- * DirectSource dependency somewhere in the graph. A true circular
- * dependency (A -> B -> A, neither finished resolving) is also an error,
- * not a silent short-circuit.
+ * Exactly one resolution per key across the graph - any incompatible
+ * second requirement (version, repoUrl/ref, or a Registry/DirectSource
+ * mix) is an error, not a silent pick. A circular dependency is too.
  *
- * A resolved package's *own* declared package_name (its real OO ABL
- * namespace - see oepm.manifest.Manifest) is independent of the key it was
- * resolved under, so two different keys can still end up resolving to
- * packages sharing the same real namespace (e.g. two independently
- * registry-routed "calculator" packages under different prefixes). PROPATH
- * is a single flat, ordered list with no ambiguity detection of its own -
- * whichever one lands first silently shadows the other, with no compile
- * error. checkNoNamespaceCollision below catches this at resolve time
- * instead, once the whole graph is known, so it's a loud, named failure
- * rather than a silently-wrong PROPATH.
+ * A resolved package's real namespace is independent of the key it was
+ * resolved under, so two keys can still collide on the same real
+ * namespace and silently shadow each other on PROPATH - caught by
+ * checkNoNamespaceCollision below once the whole graph is known.
  */
 object DependencyResolver {
     fun resolveAll(
@@ -125,11 +98,7 @@ object DependencyResolver {
         }
     }
 
-    /**
-     * Two different resolved keys sharing the same real package_name would
-     * silently shadow each other on PROPATH (see class doc) - fail loudly
-     * instead, before anything gets copied into oepm_packages/.
-     */
+    /** Fails loudly if two keys share a real package_name (see class doc), before anything is copied into oepm_packages/. */
     private fun checkNoNamespaceCollision(namespaceByKey: Map<String, String>) {
         val keysByNamespace = namespaceByKey.entries.groupBy({ it.value }, { it.key })
         for ((namespace, keys) in keysByNamespace) {

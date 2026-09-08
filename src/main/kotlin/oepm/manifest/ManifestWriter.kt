@@ -6,21 +6,9 @@ import java.io.File
 import java.io.StringWriter
 
 /**
- * Writes openedge-project.json back to disk in a fixed, readable key
- * order, instead of whatever order org.json's JSONObject happens to
- * produce (its JSONObject is backed by a plain HashMap, not a
- * LinkedHashMap - re-`put`-ing keys into a fresh JSONObject in the
- * desired order does NOT make it serialize in that order, since
- * JSONObject#toString iterates its own internal hash-bucket order
- * regardless of insertion order).
- *
- * Every oepm write path - ManifestReader's package_name autofill,
- * DependenciesUpdater, BuildPathUpdater - goes through this, so a
- * manifest's key order stays predictable no matter which one last touched
- * the file. Purely cosmetic - nothing in oepm reads key order - but keeps
- * a fixed, deliberate order (name, version, oeversion, package_name,
- * dependencies, buildPath) rather than wherever org.json's internal
- * ordering happens to put them.
+ * Writes openedge-project.json in a fixed key order - org.json's
+ * JSONObject is HashMap-backed, so it won't serialize in insertion order
+ * on its own. Every oepm write path routes through here. Purely cosmetic.
  */
 object ManifestWriter {
     private val canonicalKeyOrder = listOf("name", "version", "oeversion", "package_name", "dependencies", "buildPath")
@@ -43,10 +31,7 @@ object ManifestWriter {
         file.writeText(writer.toString())
     }
 
-    // JSONObject/JSONArray's own write(Writer, indentFactor, indent) is what
-    // toString(indentFactor) delegates to internally - calling it directly,
-    // starting at indent = indentFactor (one level in), lets a nested
-    // object/array continue at the right depth instead of restarting at 0.
+    // Starting indent at indentFactor keeps a nested object/array at the right depth, not restarting at 0.
     private fun writeValue(writer: StringWriter, value: Any) {
         when (value) {
             is JSONObject -> value.write(writer, indentFactor, indentFactor)

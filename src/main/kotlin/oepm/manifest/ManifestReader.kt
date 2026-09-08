@@ -3,12 +3,7 @@ package oepm.manifest
 import org.json.JSONObject
 import java.io.File
 
-/**
- * Reads oepm's manifest fields from openedge-project.json.
- * Per docs/spec/manifest-schema.md, there is no separate oepm.json —
- * oepm-owned keys (package_name, dependencies) live alongside the
- * vscode-abl extension's own existing keys (name, version, buildPath).
- */
+/** Reads oepm's fields from openedge-project.json - no separate oepm.json, see docs/spec/manifest-schema.md. */
 object ManifestReader {
     fun read(file: File): Manifest {
         require(file.exists()) { "Manifest not found: ${file.path}" }
@@ -47,11 +42,6 @@ object ManifestReader {
         )
     }
 
-    /**
-     * A dependencies-map entry is either a plain caret-range string
-     * (DependencySpec.Registry, today's shape) or a {repoUrl, ref} object
-     * (DependencySpec.DirectSource) - see Manifest.kt.
-     */
     private fun parseDependencySpec(key: String, value: Any, file: File): DependencySpec =
         when (value) {
             is String -> DependencySpec.Registry(value)
@@ -73,13 +63,7 @@ object ManifestReader {
                 )
         }
 
-    /**
-     * Autofill, not validation: only runs when package_name is absent
-     * entirely. Infers it from the package's own .cls files
-     * (PackageNameInferrer) and writes it into openedge-project.json on
-     * disk, so this only ever happens once per package — every read after
-     * that finds package_name already present and skips inference.
-     */
+    /** Only runs when package_name is absent - infers it from .cls files and persists it, so this runs at most once. */
     private fun inferAndPersistPackageName(file: File, json: JSONObject, sourceRoots: List<String>): String {
         val packageRoot =
             sourceRoots.firstOrNull()

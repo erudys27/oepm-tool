@@ -20,9 +20,7 @@ data class SemVer(val major: Int, val minor: Int, val patch: Int) : Comparable<S
 }
 
 /**
- * npm-style caret ranges, per docs/spec/manifest-schema.md's v1 decision
- * (caret ranges, no other range syntax supported).
- *
+ * npm-style caret ranges (v1 supports only these, no other syntax):
  * ^1.2.3 -> >=1.2.3 <2.0.0
  * ^0.2.3 -> >=0.2.3 <0.3.0   (stricter once major is 0)
  * ^0.0.3 -> >=0.0.3 <0.0.4   (stricter still once major and minor are 0)

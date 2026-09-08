@@ -5,19 +5,9 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Ensures resolved dependencies' oepm_packages source paths are present in
- * openedge-project.json's buildPath, so oepmPropath picks them up without
- * a manual edit.
- *
- * Additive only: existing entries (the project's own source, or anything
- * else already there) are preserved and never removed or reordered — new
- * entries are appended after everything already present, matching the v1
- * PROPATH-ordering default (own source first, dependencies after) as long
- * as the project's own source root was already listed first, which every
- * example so far has. Removing stale entries (a dependency that's no
- * longer part of the resolved graph) is a separate, explicit step -
- * pruneStaleOepmPackagesEntries below, used by the oepmPrune task - not
- * something ensureSourceEntries/oepmInstall ever does implicitly.
+ * Adds resolved dependencies' oepm_packages paths to buildPath. Additive
+ * only - never removes/reorders; that's pruneStaleOepmPackagesEntries'
+ * job instead, used by oepmPrune.
  */
 object BuildPathUpdater {
     fun ensureSourceEntries(manifestFile: File, paths: List<String>) {
@@ -45,21 +35,7 @@ object BuildPathUpdater {
         }
     }
 
-    /**
-     * The oepm prune counterpart to ensureSourceEntries above: removes
-     * buildPath "source" entries that look like ones oepm itself would
-     * have generated (path starts with "oepm_packages/") but aren't in
-     * expectedPaths — i.e. a dependency that's no longer part of the
-     * resolved graph. Deliberately narrow: only ever touches
-     * "oepm_packages/..." entries, never the project's own source or
-     * anything else already in buildPath, matching ensureSourceEntries'
-     * own "never remove what we didn't add" rule.
-     *
-     * dryRun: computes and returns what *would* be removed without
-     * writing anything to disk - lets a caller preview before committing.
-     *
-     * Returns the removed (or would-be-removed) paths, in declared order.
-     */
+    /** Removes stale "oepm_packages/..." buildPath entries not in expectedPaths. dryRun previews without writing. */
     fun pruneStaleOepmPackagesEntries(manifestFile: File, expectedPaths: Set<String>, dryRun: Boolean = false): List<String> {
         val json = JSONObject(manifestFile.readText())
         val buildPath = json.optJSONArray("buildPath") ?: JSONArray()

@@ -4,20 +4,11 @@ import java.io.File
 import java.security.MessageDigest
 
 /**
- * Content hash of a resolved package's source tree, recorded as
- * oepm.lock's "integrity" field so a locked package can later be verified
- * against what was actually installed (see docs/spec/lockfile-format.md).
- * Deliberately not tied to any one registry's fetch mechanism (git commit,
- * local file copy, ...) - it hashes the files on disk after install, so it
- * works the same way for LocalDirectoryRegistry, CatalogRegistry, or
- * anything else that produces a ResolvedPackage.
- *
- * Modeled on Go's dirhash Hash1: hash every file, build a manifest of
- * "<file sha256>  <relative path>" lines sorted by path (so directory
- * walk order and OS path separators never affect the result), then hash
- * that manifest. Sorting + a manifest-of-hashes (rather than concatenating
- * raw file bytes) keeps the result independent of enumeration order and
- * sensitive to renames, not just content changes.
+ * Content hash of a resolved package's source tree, for oepm.lock's
+ * "integrity" field. Modeled on Go's dirhash Hash1: hash each file, build
+ * a manifest of "<sha256>  <relative path>" lines sorted by path, then
+ * hash that - independent of walk order/OS path separators, sensitive to
+ * renames too.
  */
 object DirectoryHash {
     fun hash(dir: File): String {
