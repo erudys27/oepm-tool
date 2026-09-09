@@ -1,8 +1,10 @@
-# PROPATH generation (draft)
+# PROPATH generation
 
-Status: draft — this is the riskiest, least-proven part of the whole
-project. The vertical slice milestone exists specifically to validate or
-break this approach.
+Status: implemented (`oepm.propath.PropathGenerator`, driven by
+`oepmPropath` in `OepmPlugin.kt`). This was the riskiest, least-proven
+part of the project; the vertical slice validated the approach. The
+ordering default and the `buildPath` entry-type rules below are current
+behavior. The shadow-warning item at the bottom is still open.
 
 ## Constraints from the platform (not design choices — facts about ABL)
 

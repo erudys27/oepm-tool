@@ -1,9 +1,10 @@
 # Manifest schema
 
-Status: decided (2026-08-13) — single-file design: oepm-specific keys are
-added directly to `openedge-project.json` rather than a separate
-`oepm.json`. Exact key names/types below are still draft and may change
-once the vertical slice is actually built against them. Depends on
+Status: implemented — single-file design: oepm-specific keys are added
+directly to `openedge-project.json` rather than a separate `oepm.json`.
+The key names/types below are what `oepm.manifest.Manifest` /
+`ManifestReader` / `ManifestWriter` actually read and write today; the
+open questions at the bottom are the only parts still unsettled. Depends on
 [ADR-0002](../decisions/0002-oo-abl-only-v1.md) (OO ABL only) and
 [ADR-0004](../decisions/0004-source-as-primary-artifact.md) (source as
 primary artifact) staying as accepted.
