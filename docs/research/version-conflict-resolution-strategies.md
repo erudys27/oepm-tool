@@ -1,13 +1,15 @@
 # Version conflict resolution strategies
 
-Background research, not a decision. Prompted by a real scenario built in
-`demo/packages/` (`double-calculator-package` depending on both
-`calculator-one-package` and `calculator-two-package`, which want
-incompatible ranges of `example.greeter`) and the resulting question:
-must a diamond-dependency version conflict always be a hard failure, or
-do other ecosystems have a better answer? oepm's current behavior
-(`oepm/resolver/DependencyResolver`) is to fail loudly — this doc records
-the alternatives considered, for a future ADR if this is ever revisited.
+Background research, not a decision. Prompted by a scenario that existed
+in the old monorepo's `demo/packages/` (a `double-calculator-package`
+depending on both `calculator-one-package` and `calculator-two-package`,
+which wanted incompatible ranges of `example.greeter`) and the resulting
+question: must a diamond-dependency version conflict always be a hard
+failure, or do other ecosystems have a better answer? That demo tree is
+gone with the repo split, but oepm's current behavior
+(`oepm/resolver/DependencyResolver`) is unchanged — it fails loudly. This
+doc records the alternatives considered, for a future ADR if this is ever
+revisited.
 
 **None of the options below actually solve the underlying conflict** —
 that's not a gap in this research, it's a property of the problem. When
@@ -110,10 +112,12 @@ pick one automatically instead of failing — is the same).
 exactly one final answer, same as today's hard-fail behavior, just chosen
 automatically instead of chosen by a human fixing the conflict by hand.
 The risk: silent. A package can end up compiled against a version its
-author never tested, with no error at all — the same class of bug
-`demo/exploration/consumer-app/WALKTHROUGH.md` (the include-collision
-finding, [ADR-0007](../decisions/0007-namespace-relative-includes.md))
-already surfaced once in this project.
+author never tested, with no error at all — the same class of bug the
+include-collision finding behind
+[ADR-0007](../decisions/0007-namespace-relative-includes.md) already
+surfaced once in this project (originally worked through in the old
+monorepo's `demo/exploration/consumer-app/WALKTHROUGH.md`, now captured in
+that ADR's Context section).
 
 ### 4. Manual override (Yarn `resolutions` / npm `overrides` / pnpm `overrides`) — usable, best fit
 

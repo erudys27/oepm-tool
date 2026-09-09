@@ -1,10 +1,17 @@
 # What each Kotlin/Gradle file does
 
-A plain-language, file-by-file tour of this repo's `.kt` and `.kts` files —
-written for a junior programmer who knows some programming but hasn't
-necessarily used Gradle or Kotlin before. Everything about `.cls`, `.i`,
-`.p`, `.lock`, and `openedge-project.json` files is left out on purpose;
-this doc is only about the Kotlin/Gradle side.
+A plain-language tour of this repo's Gradle/build side — the root `.kts`
+build scripts, the wrapper, the scaffold templates — plus how the plugin
+code under `src/` fits together at runtime (the two step-by-step
+walkthroughs at the end). Written for a junior programmer who knows some
+programming but hasn't necessarily used Gradle or Kotlin before.
+Everything about `.cls`, `.i`, `.p`, `.lock`, and `openedge-project.json`
+files is left out on purpose; this doc is only about the Kotlin/Gradle
+side.
+
+For a per-file reference of the plugin code itself — what each `.kt` file
+under `src/` contains — see [`../src-kt-file-guide.md`](../src-kt-file-guide.md).
+This doc links to it rather than repeating it.
 
 This repo used to be the whole `oepm` monorepo — plugin, a `demo/` app,
 and registry content all together. It's since been split (see README.md's
@@ -16,7 +23,7 @@ and small throwaway fixture packages this repo carries itself for tests
 and `docs/research/` may still mention `demo/` — those are historical
 records of the monorepo era and are left as-is on purpose, not updated.
 
-Two definitions before the list:
+Two definitions first:
 
 - **Gradle** is the build tool oepm is written as a plugin for. A **task**
   is one named unit of work Gradle can run, e.g. `oepmInstall`. A `.kts`
@@ -83,165 +90,49 @@ Plain text templates with `{{TOKEN}}` placeholders, filled in by the
 `projectRoot.set(file(".."))` for the `.oepm/` layout), `gradle.properties.template`,
 `openedge-project.json.template`.
 
-## `src/main/kotlin/oepm/` — the plugin's actual logic
+## `src/` — the plugin code and its tests
 
-This is the real code, grouped by package. Read the "install walkthrough"
-below for how these actually fit together at runtime.
+The full per-file reference lives in **[`../src-kt-file-guide.md`](../src-kt-file-guide.md)**:
+for every `.kt` file under `src/`, the types/functions it holds and how it
+connects to the rest, plus tables for the unit tests and functional
+tests. Read that when you want the logic of one specific file.
 
-**`OepmPlugin.kt` — the entry point.** When a project applies
-`id("io.github.erudys27.oepm")`, its `apply()` function runs once and
-registers four Gradle tasks:
-- **`oepmInstall`** — resolves the project's dependencies and installs
-  them (full behavior in the walkthrough below). `-PoepmAdd=<package>[:<versionSpec>]`
-  adds and resolves a new dependency in the same step.
-- **`oepmPropath`** — prints the project's PROPATH, computed from
-  `buildPath`'s `"source"` entries. `-PoepmIncludeTests` (`oepm propath --tests`)
-  also includes `"test"` entries, appended after the source ones.
-- **`oepmRegistryAdd`** — appends a registry entry to
-  `oepm-registries.properties` (`-PregistryPrefix=... -PcatalogUrl=...`),
-  so a registry can be added without hand-editing `build.gradle.kts`.
-- **`oepmPrune`** (`oepm prune [--dry-run]`) — re-resolves the dependency
-  graph the same way `oepmInstall` does, then removes any
-  `oepm_packages/` folder (and matching `buildPath` entry) that isn't
-  part of that graph anymore — e.g. a dependency removed from
-  `dependencies` by hand. `-PoepmDryRun` computes and reports what would
-  be removed without deleting or writing anything.
+What follows here is only the orientation the runtime walkthroughs below
+need — how the pieces fit together, not what each file contains.
 
-It also defines `OepmExtension`, the `oepm {}` block a project configures:
-`projectRoot` (where the actual ABL project lives — defaults to wherever
-`build.gradle.kts` itself is; set to `file("..")` for the `.oepm/`
-layout), `registryRoot` (the old, single-local-folder registry, still the
-fallback when no `registries{}` are configured), `cacheDir` (where
-fetched packages are cached — `~/.oepm/cache` by default), and the
-`registries {}` container of named `GitRegistrySpec` entries
-(`prefix`, `catalogUrl`, `catalogRef`).
-
-**`manifest/`** — reading/writing a project's `openedge-project.json`:
-- **`Manifest.kt`** — a plain data class representing what got read out of
-  the file (`name`, `version`, `packageName`, `dependencies`,
-  `sourceRoots`), plus `DependencySpec`: a dependency is either
-  `Registry(versionSpec)` (a plain caret-range string, routed through
-  whatever registry matches its prefix) or `DirectSource(repoUrl, ref)`
-  (an inline `{repoUrl, ref}` object — fetched by git directly, no
-  registry lookup at all).
-- **`ManifestReader.kt`** — parses `openedge-project.json` into a
-  `Manifest`. Auto-infers `package_name` from the project's own `.cls`
-  files (via `PackageNameInferrer`, below) and writes it back if it was
-  missing, rather than always requiring it hand-typed.
-- **`ManifestWriter.kt`** — the shared "write this JSON back to disk,
-  preserving formatting" used by the writers below.
-- **`PackageNameInferrer.kt`** — scans a source root's `.cls` files for
-  their declared OO ABL namespace (`class <namespace>.<Name>:`) and
-  returns it, failing loudly if files disagree on namespace or none are
-  found — used both by `ManifestReader`'s auto-infer and by
-  `scaffoldProject`.
-- **`BuildPathUpdater.kt`** — after a dependency is resolved and its
-  source copied in, adds that dependency's `oepm_packages/.../src` path
-  to the manifest's `buildPath` if it isn't already there. Additive
-  only — never removes or reorders anything, so hand edits survive. Its
-  counterpart, `pruneStaleOepmPackagesEntries`, does the opposite for
-  `oepmPrune` — removes only `buildPath` entries that look like ones oepm
-  itself generated (start with `"oepm_packages/"`) and aren't part of the
-  currently-resolved graph, never touching anything else.
-- **`DependenciesUpdater.kt`** — writes a new entry into the manifest's
-  `dependencies` map on disk — what `-PoepmAdd=...` uses instead of
-  requiring a hand-edit.
-
-**`propath/PropathGenerator.kt`** — small, pure function: turns a
-`Manifest`'s `sourceRoots` (its `buildPath` entries of `type: "source"`)
-into a list of absolute folder paths on disk. That list *is* the PROPATH.
-No file writing, no side effects.
-
-**`registry/`** — implementations of `Registry` (in `Registry.kt`, along
-with `ResolvedPackage` — name, version, source/project folders, and an
-`installSubpath` hint for where `oepm_packages/` should nest it):
-- **`LocalDirectoryRegistry.kt`** — the original v1 registry: a folder on
-  disk, one subfolder per package. Still the fallback when no
-  `registries{}`/`oepm-registries.properties` entries are configured.
-- **`CatalogRegistry.kt`** — a remote registry backed by a small git
-  "catalog" repo holding no package content itself, just one reference
-  file per package version pointing at that package's own dedicated repo
-  + tag. A package's folder can hold any number of version files —
-  `resolve` picks the highest one satisfying the requested caret range,
-  `findAny` picks the highest available overall; only the version
-  actually picked ever gets fetched, never every candidate. Fetches
-  through `GitPackageFetcher` (below); sets `installSubpath` to
-  `"<prefix>/<localName>"`.
-- **`PrefixRoutingRegistry.kt`** — routes a package name to whichever
-  configured registry's prefix it matches (longest prefix wins); no
-  configured prefix matching is a loud error, not a silent fallback.
-- **`PackageMatcher.kt`** — shared candidate-matching logic used by
-  `LocalDirectoryRegistry`.
-- **`RegistriesPropertiesFile.kt`** — reads/appends
-  `oepm-registries.properties` entries (`<name>.prefix`/`<name>.catalogUrl`/`<name>.catalogRef`),
-  the CLI-appendable alternative to hand-editing the `registries{}` DSL.
-
-**`fetch/`** — git plumbing shared by `CatalogRegistry` and direct-source
-dependencies:
-- **`GitCli.kt`** — thin wrapper around shelling out to the system `git`.
-- **`GitPackageFetcher.kt`** — fetches one package repo at a given ref.
-  Caches as one bare clone per package (`_bare.git/` — no working-tree
-  files, just git history) plus one `git worktree` checkout per version
-  actually used (`<ref>/`). A version already checked out is reused
-  as-is; a new version of an already-cached package is a local
-  `git worktree add`, and only a genuinely new ref costs a real
-  `git fetch` — cheaper than a fresh clone every time.
-
-**`lock/` / `integrity/`** — `oepm.lock` and tamper detection:
-- **`LockfileReader.kt`** — reads `oepm.lock`'s existing `resolved` entries.
-- **`DirectoryHash.kt`** — content-hashes a resolved package's source
-  folder (per-file hash → sorted manifest → one final hash).
-- **`IntegrityChecker.kt`** — compares a freshly-resolved package's hash
-  against `oepm.lock`'s existing entry for that same version; a mismatch
-  (e.g. a git tag force-moved to different content) fails loudly instead
-  of silently accepting the new content.
-
-**`resolver/DependencyResolver.kt`** — walks the *whole* dependency graph,
-not just what's declared directly in one manifest: for every resolved
-package, its own `openedge-project.json` is read and its dependencies
-resolved too, recursively. Checks along the way:
-- The same key resolved twice with an incompatible requirement (a version
-  range that doesn't match what's already resolved, or a direct-source
-  spec with a different `repoUrl`/`ref`, or one spec being a registry
-  dependency and the other direct-source) fails loudly.
-- A circular dependency (A needs B, B needs A) fails loudly instead of
-  looping forever.
-- Once the whole graph is resolved, `checkNoNamespaceCollision` checks
-  every resolved package's *real* `package_name` (independent of the key
-  it was resolved under) for collisions — two different keys resolving to
-  packages sharing the same real ABL namespace would silently shadow each
-  other on PROPATH otherwise, so this fails loudly instead.
-
-**`version/SemVer.kt`** — two small, related pieces of version-number
-logic in one file: `SemVer` (parses/compares plain `X.Y.Z`), `CaretRange`
-(npm-style `^X.Y.Z` matching).
-
-## `src/test/kotlin/oepm/` — unit tests
-
-One test file per main file above, mirroring the same package structure —
-`fetch/`, `integrity/`, `lock/`, `manifest/`, `registry/`, `resolver/`,
-`version/`. Each tests its counterpart in isolation (real temp
-directories/git repos where relevant, no Gradle build involved).
-
-## `src/functionalTest/kotlin/oepm/` — functional tests
-
-Different from the unit tests above: these run the *real* plugin through
-a *real* (throwaway) Gradle build, using Gradle's own `TestKit`.
-
-- **`OepmPluginFunctionalTest.kt`** — applies the plugin via
-  `includeBuild`/`withPluginClasspath()`, using this repo's own small
-  fixture packages (`src/functionalTest/resources/fixtures/`), and
-  actually runs `oepmInstall`/`oepmPropath`/`oepmRegistryAdd` — checking
-  real task output and real files on disk, not just Kotlin function
-  calls. Covers transitive resolution, version conflicts, the one-step
-  "add and install" flow, merged `registries{}`/properties-file registry
-  config, `oepm_packages/` nesting by registry prefix vs. direct-source,
-  and `projectRoot` letting the ABL project live one level up from
-  Gradle's own files (the `.oepm/` layout).
-- **`PublishedPluginFunctionalTest.kt`** — proves the plugin can be
-  applied the way a real, separate consumer repo would: by plugin id +
-  version resolved from a Maven repository, not `includeBuild`/TestKit's
-  classpath shortcut.
+- **`OepmPlugin.kt`** — the entry point. Its `apply()` runs once when a
+  project applies `id("io.github.erudys27.oepm")` and registers four
+  tasks: **`oepmInstall`** (resolve + install dependencies;
+  `-PoepmAdd=<package>[:<versionSpec>]` adds one in the same step),
+  **`oepmPropath`** (print the PROPATH from `buildPath`'s `"source"`
+  entries; `-PoepmIncludeTests` / `oepm propath --tests` appends `"test"`
+  entries), **`oepmRegistryAdd`** (append to `oepm-registries.properties`),
+  **`oepmPrune`** (`oepm prune [--dry-run]` — remove `oepm_packages/` and
+  `buildPath` entries no longer in the resolved graph). It also defines
+  `OepmExtension`, the `oepm {}` block: `projectRoot`, `registryRoot`,
+  `cacheDir`, and the `registries {}` container.
+- **`manifest/`** — reads and writes `openedge-project.json`
+  (`ManifestReader` / `ManifestWriter` / `Manifest`), infers a missing
+  `package_name` from `.cls` files (`PackageNameInferrer`), and patches
+  `dependencies` / `buildPath` (`DependenciesUpdater`, `BuildPathUpdater`).
+- **`registry/`** — given a package name + caret range, finds the package.
+  `PrefixRoutingRegistry` routes by longest matching prefix to a
+  `CatalogRegistry` (a git catalog repo of reference files) or the
+  fallback `LocalDirectoryRegistry`. `RegistriesPropertiesFile` is the
+  CLI-editable config source.
+- **`fetch/`** — `GitCli` (shells out to `git`) and `GitPackageFetcher`
+  (bare-clone-plus-`git worktree` cache, shared by `CatalogRegistry` and
+  direct-source deps).
+- **`resolver/DependencyResolver.kt`** — walks the whole graph
+  transitively, failing loudly on version conflicts, circular
+  dependencies, and real-namespace collisions.
+- **`lock/` + `integrity/`** — `DirectoryHash` content-hashes an installed
+  package, `IntegrityChecker` compares it against `oepm.lock`,
+  `LockfileReader` reads the existing lock.
+- **`propath/PropathGenerator.kt`** — pure function: source roots →
+  absolute paths.
+- **`version/SemVer.kt`** — `SemVer` (parse/compare `X.Y.Z`) and
+  `CaretRange` (`^X.Y.Z` matching).
 
 ## Root `oepm` / `oepm.bat`, `cli/`, and `oepm-init` — the command-line layer
 

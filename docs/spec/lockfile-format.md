@@ -1,7 +1,11 @@
-# Lockfile format (draft)
+# Lockfile format
 
-Status: draft — not yet implemented. `propath_order` question resolved
-(2026-08-13): always recomputed, never stored — see below.
+Status: implemented. `oepm.lock` is written by `oepmInstall`
+(`OepmPlugin.kt`); the integrity hash is `oepm.integrity.DirectoryHash`,
+verified on every reinstall by `oepm.lock.IntegrityChecker`. The
+`propath_order` question was resolved (2026-08-13): always recomputed,
+never stored — see below. One open question remains (conflict-resolution
+strategy, at the bottom).
 
 ## File
 
@@ -16,26 +20,29 @@ resolver must select exactly **one** version per package name per
 project — there is no npm-style "install both" escape hatch. The lockfile
 is what makes that single resolved choice explicit and stable.
 
-## Draft shape
+## Shape
 
 ```json
 {
   "resolved": {
     "acme.common": {
       "version": "1.0.3",
-      "source": "local:///registry/acme.common/1.0.3",
+      "source": "/home/you/.oepm/cache/ba/common/v1.0.3/src",
       "integrity": "sha256:..."
     },
     "acme.validation": {
       "version": "1.2.0",
-      "source": "local:///registry/acme.validation/1.2.0",
+      "source": "/home/you/.oepm/cache/ba/validation/v1.2.0/src",
       "integrity": "sha256:..."
     }
   }
 }
 ```
 
-`propath_order` is deliberately **not** part of this shape — see below.
+`source` is the absolute path of the resolved package in the local fetch
+cache (`cacheDir`), written by `OepmPlugin.kt`'s `oepmInstall` — machine-
+specific, informational only, not used on reinstall. `propath_order` is
+deliberately **not** part of this shape — see below.
 
 ## Decided: propath_order is not stored
 

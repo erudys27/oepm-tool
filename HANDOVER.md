@@ -107,9 +107,14 @@ don't get re-litigated from scratch or assumed to be oversights:
 
 ## Where to read more
 
-- **`docs/spec/kotlin-gradle-files.md`** — a file-by-file tour of every
-  `.kt`/`.kts` file in this repo, written for someone new to Gradle/Kotlin.
-  Read this to understand the actual code.
+- **`docs/spec/kotlin-gradle-files.md`** — the Gradle/build side (root
+  `.kts` scripts, wrapper, scaffold templates) plus the `oepm install` /
+  `oepm propath` runtime walkthroughs, written for someone new to
+  Gradle/Kotlin. Read this to see how the pieces fit together.
+- **`docs/src-kt-file-guide.md`** — the per-file reference for the plugin
+  code under `src/`: for each `.kt` file, the types/functions it contains
+  and how it connects to the rest, plus tables for the tests. Check here
+  when you want the logic of one specific file.
 - **`docs/spec/manifest-schema.md`**, **`lockfile-format.md`**,
   **`propath-generation.md`** — the design specs for `openedge-project.json`,
   `oepm.lock`, and PROPATH generation respectively.
