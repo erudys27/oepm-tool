@@ -57,6 +57,27 @@ class DependenciesUpdaterTest {
     }
 
     @Test
+    fun `removes a dependency, leaving others untouched`() {
+        val file = manifestWithDependencies("""{"example.calculator": "^1.0.0", "example.greeter": "^2.0.0"}""")
+
+        DependenciesUpdater.removeDependency(file, "example.calculator")
+
+        val dependencies = JSONObject(file.readText()).getJSONObject("dependencies")
+        assertTrue(!dependencies.has("example.calculator"))
+        assertEquals("^2.0.0", dependencies.getString("example.greeter"))
+    }
+
+    @Test
+    fun `removing a dependency that isn't declared is a no-op`() {
+        val file = manifestWithDependencies("""{"example.greeter": "^2.0.0"}""")
+
+        DependenciesUpdater.removeDependency(file, "example.calculator")
+
+        val dependencies = JSONObject(file.readText()).getJSONObject("dependencies")
+        assertEquals("^2.0.0", dependencies.getString("example.greeter"))
+    }
+
+    @Test
     fun `adding a dependency that didn't exist yet places the key right after version`() {
         val file = createTempFile(suffix = ".json").toFile()
         file.writeText(

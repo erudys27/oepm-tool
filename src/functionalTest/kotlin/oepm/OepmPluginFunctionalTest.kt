@@ -760,4 +760,107 @@ class OepmPluginFunctionalTest {
             "Expected nothing to remove, got:\n${pruneResult.output}",
         )
     }
+
+    // --- oepmUninstall ---
+
+    private fun buildTwoIndependentPackagesProject(): Pair<File, File> {
+        val registryDir = createTempDirectory("oepm-functional-test-uninstall-registry").toFile()
+        for (name in listOf("alpha", "beta")) {
+            val packageDir = File(registryDir, "example.$name")
+            packageDir.resolve("src/example/$name").mkdirs()
+            packageDir.resolve("src/example/$name/Thing.cls").writeText("class example.$name.Thing:\nend class.\n")
+            packageDir.resolve("openedge-project.json").writeText(
+                JSONObject()
+                    .put("name", "$name-package")
+                    .put("version", "1.0.0")
+                    .put("package_name", "example.$name")
+                    .put("dependencies", JSONObject())
+                    .put("buildPath", JSONArray().put(JSONObject().put("type", "source").put("path", "src")))
+                    .toString(2),
+            )
+        }
+
+        val projectDir = createTempDirectory("oepm-functional-test-uninstall-project").toFile()
+        val registryPath = registryDir.absolutePath.replace("\\", "/")
+        projectDir.resolve("settings.gradle.kts").writeText("""rootProject.name = "uninstall-fixture"""")
+        projectDir.resolve("build.gradle.kts").writeText(
+            """
+            plugins {
+                id("io.github.erudys27.oepm")
+            }
+
+            oepm {
+                registryRoot.set(file("$registryPath"))
+            }
+            """.trimIndent(),
+        )
+        writeManifest(projectDir, listOf("example.alpha", "example.beta"))
+        return registryDir to projectDir
+    }
+
+    @Test
+    fun `oepmUninstall removes a dependency and its oepm_packages, buildPath, and lock entries, leaving others alone`() {
+        val (_, projectDir) = buildTwoIndependentPackagesProject()
+
+        run(projectDir, "oepmInstall")
+        assertTrue(File(projectDir, "oepm_packages/example.beta/src").exists())
+
+        val uninstallResult = run(projectDir, "oepmUninstall", "-PoepmUninstall=example.beta")
+
+        assertTrue(
+            uninstallResult.output.contains("removed \"example.beta\""),
+            "Expected a summary naming example.beta, got:\n${uninstallResult.output}",
+        )
+        assertTrue(
+            !JSONObject(File(projectDir, "openedge-project.json").readText()).getJSONObject("dependencies").has("example.beta"),
+            "Expected example.beta removed from dependencies",
+        )
+        assertTrue(
+            !File(projectDir, "oepm_packages/example.beta").exists(),
+            "Expected example.beta's whole folder removed from oepm_packages",
+        )
+        assertTrue(
+            "oepm_packages/example.beta/src" !in buildPathOf(projectDir),
+            "Expected example.beta's buildPath entry removed",
+        )
+        assertTrue(
+            !JSONObject(File(projectDir, "oepm.lock").readText()).getJSONObject("resolved").has("example.beta"),
+            "Expected example.beta removed from oepm.lock",
+        )
+
+        assertTrue(
+            JSONObject(File(projectDir, "openedge-project.json").readText()).getJSONObject("dependencies").has("example.alpha"),
+            "Expected example.alpha (not uninstalled) to be left alone in dependencies",
+        )
+        assertTrue(
+            File(projectDir, "oepm_packages/example.alpha/src/example/alpha/Thing.cls").exists(),
+            "Expected example.alpha to be left alone in oepm_packages",
+        )
+        assertTrue(
+            "oepm_packages/example.alpha/src" in buildPathOf(projectDir),
+            "Expected example.alpha's buildPath entry to be left alone",
+        )
+        assertTrue(
+            JSONObject(File(projectDir, "oepm.lock").readText()).getJSONObject("resolved").has("example.alpha"),
+            "Expected example.alpha to be left alone in oepm.lock",
+        )
+    }
+
+    @Test
+    fun `oepmUninstall fails loudly for a package that isn't declared`() {
+        val (_, projectDir) = buildTwoIndependentPackagesProject()
+        run(projectDir, "oepmInstall")
+
+        val result =
+            GradleRunner.create()
+                .withProjectDir(projectDir)
+                .withPluginClasspath()
+                .withArguments("oepmUninstall", "-PoepmUninstall=example.nonexistent")
+                .buildAndFail()
+
+        assertTrue(
+            result.output.contains("example.nonexistent") && result.output.contains("not declared"),
+            "Expected a clear error naming example.nonexistent, got:\n${result.output}",
+        )
+    }
 }
