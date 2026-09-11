@@ -205,6 +205,68 @@ class OepmPlugin : Plugin<Project> {
             }
         }
 
+        project.tasks.register("oepmUninstall") { task ->
+            task.group = "oepm"
+            task.description =
+                "Removes a dependency and cleans up its oepm_packages/oepm.lock/buildPath entries. " +
+                "Usage: -PoepmUninstall=<package_name>"
+            task.doLast {
+                val packageName =
+                    project.findProperty("oepmUninstall") as String?
+                        ?: throw GradleException("Missing -PoepmUninstall=<package_name>.")
+
+                val projectRoot = extension.projectRoot.get().asFile
+                val manifestFile = projectRoot.resolve("openedge-project.json")
+                val registry = buildRegistry(extension)
+                val manifest = ManifestReader.read(manifestFile)
+
+                require(packageName in manifest.dependencies) {
+                    "\"$packageName\" is not declared in dependencies - nothing to uninstall."
+                }
+
+                // Re-resolves what's left, same as oepmPrune, to know exactly
+                // what should still exist (including anything that was only
+                // pulled in transitively by the package being removed).
+                val remainingDependencies = manifest.dependencies - packageName
+                val directSourceCacheDir = extension.cacheDir.get().asFile.resolve("_direct")
+                val resolvedPackages = DependencyResolver.resolveAll(remainingDependencies, registry, directSourceCacheDir)
+                val expectedPaths =
+                    resolvedPackages.map { (name, resolvedPackage) ->
+                        "oepm_packages/${resolvedPackage.installSubpath ?: name}/src"
+                    }.toSet()
+
+                val oepmPackagesDir = projectRoot.resolve("oepm_packages")
+                val staleDirs = findStaleOepmPackagesDirs(projectRoot, expectedPaths)
+                staleDirs.forEach { (leafDir, _) ->
+                    leafDir.deleteRecursively()
+                    removeNowEmptyAncestors(leafDir.parentFile, oepmPackagesDir)
+                }
+                BuildPathUpdater.pruneStaleOepmPackagesEntries(manifestFile, expectedPaths)
+                DependenciesUpdater.removeDependency(manifestFile, packageName)
+
+                // Reuses each remaining package's already-known integrity
+                // rather than re-hashing - only falls back to a fresh hash
+                // if oepm.lock didn't already have an entry for it.
+                val existingLock = LockfileReader.read(projectRoot.resolve("oepm.lock"))
+                val resolvedJson = JSONObject()
+                resolvedPackages.forEach { (name, resolvedPackage) ->
+                    val integrity = existingLock[name]?.integrity ?: DirectoryHash.hash(resolvedPackage.sourceDir)
+                    resolvedJson.put(
+                        name,
+                        JSONObject()
+                            .put("version", resolvedPackage.version)
+                            .put("source", resolvedPackage.sourceDir.absolutePath)
+                            .put("integrity", integrity),
+                    )
+                }
+                projectRoot.resolve("oepm.lock").writeText(JSONObject().put("resolved", resolvedJson).toString(2))
+
+                project.logger.lifecycle(
+                    "oepm uninstall: removed \"$packageName\" (${staleDirs.size} package folder(s) cleaned up)",
+                )
+            }
+        }
+
         project.tasks.register("oepmRegistryAdd") { task ->
             task.group = "oepm"
             task.description =
