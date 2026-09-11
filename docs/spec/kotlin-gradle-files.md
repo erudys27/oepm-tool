@@ -33,7 +33,7 @@ Two definitions first:
 - **A Gradle plugin** is code that adds new tasks (and other capabilities)
   to a Gradle project. oepm itself *is* a Gradle plugin — this whole repo
   builds one JAR file that other Gradle projects can apply to gain the
-  `oepmInstall`/`oepmPropath`/`oepmRegistryAdd`/`oepmPrune` tasks.
+  `oepmInstall`/`oepmUninstall`/`oepmPropath`/`oepmRegistryAdd`/`oepmPrune` tasks.
 
 ## Root project — building the oepm plugin itself
 
@@ -101,9 +101,12 @@ What follows here is only the orientation the runtime walkthroughs below
 need — how the pieces fit together, not what each file contains.
 
 - **`OepmPlugin.kt`** — the entry point. Its `apply()` runs once when a
-  project applies `id("io.github.erudys27.oepm")` and registers four
+  project applies `id("io.github.erudys27.oepm")` and registers five
   tasks: **`oepmInstall`** (resolve + install dependencies;
   `-PoepmAdd=<package>[:<versionSpec>]` adds one in the same step),
+  **`oepmUninstall`** (`-PoepmUninstall=<package>` — remove one
+  dependency, re-resolve what's left, and clean up its `oepm_packages/`/
+  `oepm.lock`/`buildPath` entries, same cleanup `oepmPrune` uses),
   **`oepmPropath`** (print the PROPATH from `buildPath`'s `"source"`
   entries; `-PoepmIncludeTests` / `oepm propath --tests` appends `"test"`
   entries), **`oepmRegistryAdd`** (append to `oepm-registries.properties`),

@@ -73,6 +73,7 @@ check` before every merge is on you.
 oepm-init                              wire up a new/existing project (interactive)
 oepm install                           resolve declared dependencies
 oepm install <package>[:<versionSpec>] add + resolve a dependency in one step
+oepm uninstall <package>               remove a dependency and clean up its files
 oepm propath                           print the generated PROPATH
 oepm propath --tests                   ...also including buildPath's "test" entries
 oepm registry add [<prefix> <url>]     add a registry (interactive if omitted)

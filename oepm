@@ -24,6 +24,7 @@ usage() {
     echo "Usage:"
     echo "  oepm install                          resolve declared dependencies"
     echo "  oepm install <package>[:<versionSpec>] add + resolve a dependency in one step"
+    echo "  oepm uninstall <package>               remove a dependency and clean up its files"
     echo "  oepm propath [--tests]                 print the generated PROPATH"
     echo "                                          (--tests also includes buildPath's \"test\" entries)"
     echo "  oepm registry add [<prefix> <url> [<name>]]  add a registry to oepm-registries.properties"
@@ -44,6 +45,13 @@ case "$command" in
             "$GRADLEW" "${PROJECT_DIR_ARGS[@]}" oepmInstall
         elif [ "$#" -eq 1 ]; then
             "$GRADLEW" "${PROJECT_DIR_ARGS[@]}" oepmInstall "-PoepmAdd=$1"
+        else
+            usage
+        fi
+        ;;
+    uninstall)
+        if [ "$#" -eq 1 ]; then
+            "$GRADLEW" "${PROJECT_DIR_ARGS[@]}" oepmUninstall "-PoepmUninstall=$1"
         else
             usage
         fi

@@ -37,6 +37,8 @@ registries:
   dependency into a consumer.
 - **`oepm prune [--dry-run]`** - removes `oepm_packages/`/`buildPath`
   entries no longer part of the resolved graph.
+- **`oepm uninstall <package>`** - removes a dependency and cleans up its
+  `oepm_packages/`/`oepm.lock`/`buildPath` entries in one step.
 - Backward compatible: no `registries {}` configured falls back to a
   plain local-directory registry.
 
@@ -59,9 +61,10 @@ the team before treating as settled.
    done, bare `oepm-init` works from anywhere, for this or any future
    project. See `HANDOVER.md` and `docs/spec/kotlin-gradle-files.md` for
    what it actually does.
-3. **(Optional) Install the global CLI**, so `oepm install`/`propath`/
-   `prune`/`registry add` work from any project without a `./`/`.\`
-   prefix - `oepm-init` offers to do this for you, or run it directly:
+3. **(Optional) Install the global CLI**, so `oepm install`/`uninstall`/
+   `propath`/`prune`/`registry add` work from any project without a
+   `./`/`.\` prefix - `oepm-init` offers to do this for you, or run it
+   directly:
    ```
    cli/install.sh      # cli\install.ps1 on Windows
    ```
@@ -79,6 +82,7 @@ the team before treating as settled.
 oepm-init                              wire up a new/existing project (interactive)
 oepm install                           resolve declared dependencies
 oepm install <package>[:<versionSpec>] add + resolve a dependency in one step
+oepm uninstall <package>               remove a dependency and clean up its files
 oepm propath [--tests]                 print the generated PROPATH
 oepm registry add [<prefix> <url>]     add a registry (interactive if omitted)
 oepm prune [--dry-run]                 remove oepm_packages/ entries no longer declared

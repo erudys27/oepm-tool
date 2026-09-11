@@ -32,6 +32,15 @@ if /I "%COMMAND%"=="install" (
     goto :eof
 )
 
+if /I "%COMMAND%"=="uninstall" (
+    if "%~2"=="" (
+        goto usage
+    ) else (
+        call :run_gradle oepmUninstall "-PoepmUninstall=%~2"
+    )
+    goto :eof
+)
+
 if /I "%COMMAND%"=="propath" (
     if "%~2"=="" (
         call :run_gradle oepmPropath
@@ -95,6 +104,7 @@ goto :eof
 echo Usage:
 echo   oepm install                          resolve declared dependencies
 echo   oepm install ^<package^>[:^<versionSpec^>] add + resolve a dependency in one step
+echo   oepm uninstall ^<package^>              remove a dependency and clean up its files
 echo   oepm propath [--tests]                 print the generated PROPATH
 echo                                          (--tests also includes buildPath's "test" entries)
 echo   oepm registry add [^<prefix^> ^<url^> [^<name^>]]  add a registry to oepm-registries.properties
